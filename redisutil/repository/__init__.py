@@ -1,0 +1,1 @@
+from .code_challenge_judgment_job_repository import job_repository
