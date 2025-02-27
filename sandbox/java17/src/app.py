@@ -10,7 +10,7 @@ def print_verdict(
     passed: bool,
     test_case_index: int=None,
     memory_used_mb: float=None,
-    elapsed_time_ms: int=None,
+    elapsed_time_sec: float=None,
     runtime_error: str=None,
     compile_error: str=None
 ):
@@ -18,7 +18,7 @@ def print_verdict(
         "passed": passed,
         "testCaseIndex": test_case_index,
         "memoryUsedMb": memory_used_mb,
-        "elapsedTimeMs": elapsed_time_ms,
+        "elapsedTimeSec": elapsed_time_sec,
         "runtimeError": runtime_error,
         "compileError": compile_error
     }
@@ -36,40 +36,6 @@ def print_system_error(system_error: str, return_code: int=1):
     }
     print(f"SYSTEM_ERROR:{json.dumps(message_dict)}")
     sys.exit(return_code)
-
-
-def parse_elapsed_time(time_str: str) -> float:
-    """
-    "Elapsed (wall clock) time" 문자열을 초 단위의 float 값으로 변환합니다.
-    예상되는 형식:
-      - h:mm:ss.cc 또는 m:ss.cc (콜론이 포함된 경우)
-      - 또는 초 단위의 숫자 (예: "00.11")
-    """
-    time_str = time_str.strip()
-
-    # 콜론이 없으면 단순히 초 단위의 숫자로 변환
-    if ":" not in time_str:
-        return float(time_str)
-
-    parts = time_str.split(':')
-
-    # 형식: m:ss.cc
-    if len(parts) == 2:
-        minutes = int(parts[0])
-        seconds = float(parts[1])
-        return minutes * 60 + seconds
-
-    # 형식: h:mm:ss.cc
-    elif len(parts) == 3:
-        hours = int(parts[0])
-        minutes = int(parts[1])
-        seconds = float(parts[2])
-        return hours * 3600 + minutes * 60 + seconds
-    else:
-        print_system_error(
-            f"Unknown elapsed time format: {time_str}",
-            return_code=1
-        )
 
 
 # java 컴파일 시간 제한은 실행 시간 제한과 별도로 적정하게 설정할 것
@@ -108,9 +74,10 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
         inputs: list[str] = tc[0]
         expected_result: str = tc[1]
         input_str: str = "\n".join(inputs)
+        time_output_file_name = f"time_output{idx + 1}.txt"
 
         execute_cmd = [
-            "/usr/bin/time", "-v", "-o", "time_output.txt",     # /usr/bin/time 유틸리티를 사용하여 실행하는 프로세스의 리소스 사용 통계를 얻음
+            "/usr/bin/time", "-f", "%e %M", "-o", time_output_file_name,     # /usr/bin/time 유틸리티를 사용하여 실행하는 프로세스의 리소스 사용 통계를 얻음
             "java",
             f"-Xms{test_case_memory_limit // 4}m",              # 최초 힙 메모리 지정
             f"-Xmx{test_case_memory_limit}m",                   # 최대 힙 메모리 지정
@@ -144,7 +111,7 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
             print_verdict(
                 False,
                 test_case_index=idx+1,
-                runtime_error="실행 시간 제한 초과"
+                runtime_error=f"실행 시간 제한 {test_case_time_limit}초 초과"
             )
             continue
         except Exception as e:
@@ -158,20 +125,15 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
         # time 유틸의 출력에서 메모리 사용량과 실행 시간 기록 파싱
         mem_used_kb = None
         elapsed_time_sec = None
-        try:
-            with open("time_output.txt", "r") as f:
-                for line in f:
-                    if "Maximum resident set size" in line:
-                        parts = line.split(":", 1)
-                        if len(parts) > 1:
-                            mem_used_kb = int(parts[1].strip())
-                    if "Elapsed (wall clock) time" in line:
-                        parts = line.rsplit(":", 1)
-                        if len(parts) > 1:
-                            elapsed_time_sec = parse_elapsed_time(parts[1].strip())
 
-            if mem_used_kb is None or elapsed_time_sec is None:
-                raise ValueError("Failed to read execution log from time_output.txt")
+        try:
+            with open(time_output_file_name, "r") as f:
+                output_line = f.read().strip()  # 예: "1.23 56789"
+                parts = output_line.split()
+                if len(parts) != 2:
+                    raise ValueError("Unexpected time output format")
+                elapsed_time_sec = float(parts[0])
+                mem_used_kb = int(parts[1])
         except Exception as e:
             print_system_error(
                 f"Error reading time output file: {str(e)}",
@@ -182,7 +144,7 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
             passed=(user_code_output == expected_result),
             test_case_index=idx + 1,
             memory_used_mb=round(mem_used_kb / 1024.0, 2),
-            elapsed_time_ms=round(elapsed_time_sec * 1000 if elapsed_time_sec <= test_case_time_limit else test_case_time_limit * 1000)
+            elapsed_time_sec=elapsed_time_sec if elapsed_time_sec <= test_case_time_limit else test_case_time_limit
         )
 
 

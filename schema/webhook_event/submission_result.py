@@ -16,7 +16,7 @@ class SubmissionResult(Schema):
 
     overall_pass: bool
     max_memory_used_mb : Optional[float]
-    max_elapsed_time_ms: Optional[int]
+    max_elapsed_time_sec: Optional[int]
 
     compile_error: Optional[str]
     runtime_error: Optional[str]
@@ -37,7 +37,7 @@ if __name__=='__main__':
 
         "overallPass": True,
         "maxMemoryUsedMb": 55.12,
-        "maxElapsedTimeMs": 140,
+        "maxElapsedTimeSec": 140,
 
         "compileError": None,
         "runtimeError": None,

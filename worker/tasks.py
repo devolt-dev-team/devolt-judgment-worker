@@ -36,7 +36,7 @@ def execute_code(self, user_id: int, job_dict: dict):
         test_case_memory_limit_mb: int = TEST_CASE_EXECUTION_MEMORY_LIMIT[job.challenge_id]
         test_case_time_limit_sec: float = TEST_CASE_EXECUTION_TIME_LIMIT[job.challenge_id]
 
-        if job.code_language == 'sandbox_java':
+        if job.code_language == 'java':
             test_case_memory_limit_mb *= 2
             test_case_time_limit_sec *= 2
         elif job.code_language in ['python', 'nodejs']:
@@ -136,7 +136,7 @@ def execute_code(self, user_id: int, job_dict: dict):
 
     overall_pass = True
     max_memory_used_mb = 0
-    max_elapsed_time_ms = 0
+    max_elapsed_time_sec = 0
     compile_error = None
     runtime_error = None
 
@@ -144,14 +144,14 @@ def execute_code(self, user_id: int, job_dict: dict):
         if verdict.compile_error or verdict.runtime_error or not verdict.passed:
             overall_pass = False
             max_memory_used_mb = None
-            max_elapsed_time_ms = None
+            max_elapsed_time_sec = None
             compile_error = verdict.compile_error
             runtime_error = verdict.runtime_error
             break
 
         d = verdict.as_dict()
         max_memory_used_mb = max(max_memory_used_mb, d.get('memoryUsedMb', 0))
-        max_elapsed_time_ms = max(max_elapsed_time_ms, d.get('elapsedTimeMs', 0))
+        max_elapsed_time_sec = max(max_elapsed_time_sec, d.get('elapsedTimeSec', 0))
 
     result = SubmissionResult(
         user_id,
@@ -164,7 +164,7 @@ def execute_code(self, user_id: int, job_dict: dict):
 
         overall_pass,
         max_memory_used_mb,
-        max_elapsed_time_ms,
+        max_elapsed_time_sec,
 
         compile_error,
         runtime_error,

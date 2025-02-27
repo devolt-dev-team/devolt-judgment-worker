@@ -15,7 +15,7 @@ if __name__=='__main__':
         "passed": True,
         "testCaseIndex": 1,
         "memoryUsedMb": 15.2,
-        "elapsedTimeMs": 120,
+        "elapsedTimeSec": 120,
         "runtime_error": None,
         "compile_error": None
     }

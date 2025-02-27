@@ -9,7 +9,7 @@ class Verdict(Schema):
     passed: bool
     test_case_index: Optional[int] = None
     memory_used_mb: Optional[float] = None
-    elapsed_time_ms: Optional[int] = None
+    elapsed_time_sec: Optional[float] = None
     runtime_error: Optional[str] = None
     compile_error: Optional[str] = None
 
@@ -20,7 +20,7 @@ if __name__=='__main__':
         "passed": True,
         "testCaseIndex": 1,
         "memoryUsedMb": 15.2,
-        "elapsedTimeMs": 120,
+        "elapsedTimeSec": 0.11,
         "runtimeError": None,
         "compileError": None
     }

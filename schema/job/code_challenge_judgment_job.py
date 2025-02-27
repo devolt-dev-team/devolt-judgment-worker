@@ -87,7 +87,7 @@ if __name__=='__main__':
         "passed": True,
         "testCaseIndex": 1,
         "memoryUsedMb": 15.2,
-        "elapsedTimeMs": 120,
+        "elapsedTimeSec": 1.20,
         "runtime_error": None,
         "compile_error": None
     }
@@ -98,7 +98,7 @@ if __name__=='__main__':
         "jobId": "123-456",
         "stopFlag": False,
 
-        "codeLanguage": "sandbox_java",
+        "codeLanguage": "java",
         "code": "hi",
 
         "challengeId": 1,
