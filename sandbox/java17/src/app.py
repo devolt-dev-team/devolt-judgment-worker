@@ -41,11 +41,18 @@ def print_system_error(system_error: str, return_code: int=1):
 # java 컴파일 시간 제한은 실행 시간 제한과 별도로 적정하게 설정할 것
 def compile_java_code(java_filename: str, test_case_memory_limit: int, compile_time_limit: float = 5.0):
     # xms: 초기 힙 사이즈, xmx: 최대 힙 사이즈, xss: 스레드 스택 사이즈 (보통 기본 1mb)
-    compile_cmd = ["javac", f"-J-Xms{int(test_case_memory_limit / 4)}m", f"-J-Xmx{test_case_memory_limit}m", "-J-Xss512k", "-encoding", "UTF-8", java_filename]
+    compile_cmd = ["javac", f"-J-Xms{test_case_memory_limit // 2}m", f"-J-Xmx{test_case_memory_limit}m", "-J-Xss1024k", "-encoding", "UTF-8", java_filename]
     try:
         # 서브 프로세스 동기적 실행(subprocess.run)
         # 다음 라인으로 넘어가면 서브 프로세스는 종료된 상태임
-        proc_compile = subprocess.run(compile_cmd, capture_output=True, text=True, timeout=compile_time_limit)
+        proc_compile = subprocess.run(
+            compile_cmd,
+            capture_output=True,
+            text=True,
+            timeout=compile_time_limit,
+            encoding='utf-8',
+            errors='replace',
+        )
         if proc_compile.returncode != 0:
             if proc_compile.returncode == -9 or "Killed" in proc_compile.stderr:
                 print_verdict(
@@ -77,20 +84,28 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
         time_output_file_name = f"time_output{idx + 1}.txt"
 
         execute_cmd = [
-            "/usr/bin/time", "-f", "%e %M", "-o", time_output_file_name,     # /usr/bin/time 유틸리티를 사용하여 실행하는 프로세스의 리소스 사용 통계를 얻음
+            "/usr/bin/time", "-f", "%e %M", "-o", time_output_file_name,    # /usr/bin/time 유틸리티를 사용하여 실행하는 프로세스의 리소스 사용 통계를 얻음
             "java",
-            f"-Xms{test_case_memory_limit // 4}m",              # 최초 힙 메모리 지정
-            f"-Xmx{test_case_memory_limit}m",                   # 최대 힙 메모리 지정
-            "-Xss512k",                                         # thread stack 최대 size 지정
-            "-Dfile.encoding=UTF-8",
-            "-XX:+UseSerialGC",                                 # 예측 가능한 성능과 낮은 GC 오버헤드를 위해 Serial GC 옵션을 사용하여 단일 스레드 GC 설정, openJDK 17은 64비트 Linux 환경에서 JVM이 Server 모드로 동작하며, GC는 멀티 스레드 방식이 default
+            f"-Xms{test_case_memory_limit // 2}m",                          # 초기 힙 메모리 지정, 코드 실행 초기에 불필요한 힙 확장이나 가비지 컬렉션을 줄일 수 있음
+            f"-Xmx{test_case_memory_limit}m",                               # 최대 힙 메모리 지정
+            "-Xss1024k",                                                    # thread 별 stack 최대 size 지정
+            "-Dfile.encoding=UTF-8",                                        # 기본 문자 인코딩이 UTF-8을 보장하도록 설정
+            "-XX:+UseSerialGC",                                             # 예측 가능한 성능과 낮은 GC 오버헤드를 위해 Serial GC 옵션을 사용하여 단일 스레드 GC 설정, openJDK 17은 64비트 Linux 환경에서 JVM이 Server 모드로 동작하며, GC는 멀티 스레드 방식이 default
             "Main"
         ]
 
         try:
             # 서브 프로세스 동기적 실행(subprocess.run)
             # 다음 라인으로 넘어가면 서브 프로세스는 종료된 상태임
-            proc_run = subprocess.run(execute_cmd, input=input_str, capture_output=True, text=True, timeout=test_case_time_limit)
+            proc_run = subprocess.run(
+                execute_cmd,
+                input=input_str,
+                capture_output=True,
+                text=True,
+                timeout=test_case_time_limit,
+                encoding='utf-8',
+                errors='replace'
+            )
 
             if proc_run.returncode != 0:
                 if "/usr/bin/time" in proc_run.stderr:
@@ -127,7 +142,7 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
         elapsed_time_sec = None
 
         try:
-            with open(time_output_file_name, "r") as f:
+            with open(time_output_file_name, "r", encoding='utf-8') as f:
                 output_line = f.read().strip()  # 예: "1.23 56789"
                 parts = output_line.split()
                 if len(parts) != 2:

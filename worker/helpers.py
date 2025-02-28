@@ -6,7 +6,6 @@ import string
 import json
 import tempfile
 import logging
-from typing import List, Tuple, Dict, Optional, Any
 
 from common import TEST_CASES, TEST_CASE_EXECUTION_MEMORY_LIMIT, TEST_CASE_EXECUTION_TIME_LIMIT
 from config import DockerConfig
@@ -124,7 +123,7 @@ async def async_handle_output(
     job_id: str,
     verdicts: list[Verdict],
     webhook_manager: AsyncWebhookManager,
-    tasks: List[asyncio.Task]
+    tasks: list[asyncio.Task]
 ) -> None:
     try:
         while True:
@@ -132,7 +131,7 @@ async def async_handle_output(
             if not line:
                 break
 
-            line = line.decode().strip()
+            line = line.decode('utf-8').strip()
             if line.startswith("VERDICT:"):
                 verdict = Verdict.create_from_dict(json.loads(line[len("VERDICT:"):]))
                 verdicts.append(verdict)
@@ -167,7 +166,7 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
         test_cases = TEST_CASES[job.challenge_id]
 
         # 임시 파일 생성
-        with tempfile.NamedTemporaryFile(mode='w', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False) as tmp:
             tmp.write(code_decoded)
             tmp_code_path = tmp.name
 
