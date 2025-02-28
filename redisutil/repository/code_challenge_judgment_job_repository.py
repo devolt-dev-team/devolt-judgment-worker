@@ -110,7 +110,6 @@ class CodeChallengeJudgmentJobRepository:
         job_id: str,
         user_id: int = None,
         stop_flag: bool = None,
-        last_test_case_index: int = None,
         verdicts: list[Verdict] = None
     ) -> int:
         if user_id is None:
@@ -138,9 +137,6 @@ class CodeChallengeJudgmentJobRepository:
 
         if stop_flag is not None:
             job.stop_flag = stop_flag
-
-        if last_test_case_index is not None:
-            job.last_test_case_index = last_test_case_index
 
         if verdicts is not None:
             job.verdicts = verdicts

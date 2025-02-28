@@ -24,7 +24,6 @@ class CodeChallengeJudgmentJob(Schema):
 
         challenge_id (int): 코딩 챌린지 ID (문제 ID)
         total_test_cases (int): 테스트 케이스 총 개수
-        last_test_case_index (int): 마지막으로 실행된 테스트 케이스 인덱스
         verdicts (list[Verdict]): 각 테스트 케이스별 평가 기록
 
         submitted_at (str): 작업이 제출된 시각 (ISO 8601 형식, KST)
@@ -37,7 +36,6 @@ class CodeChallengeJudgmentJob(Schema):
 
     challenge_id: int
     total_test_cases: int
-    last_test_case_index: int
     verdicts: list[Verdict]
 
     submitted_at: str
@@ -75,7 +73,6 @@ class CodeChallengeJudgmentJob(Schema):
 
             challenge_id=challenge_id,
             total_test_cases=total_test_cases,
-            last_test_case_index=-1,
             verdicts=[],
 
             submitted_at=now_in_seoul.strftime('%Y-%m-%dT%H:%M:%S')
@@ -103,7 +100,6 @@ if __name__=='__main__':
 
         "challengeId": 1,
         "totalTestCases": 10,
-        "lastTestCaseIndex": 1,
         "verdicts": [
             verdict
         ],

@@ -1,35 +1,73 @@
+import asyncio # 비동기 작업을 처리하기 위한 파이썬 기본 라이브러리입니다. async와 await를 키워드를 통한 코루틴 작업을 통해 여러 작업을 동시에 실행할 수 있게 해줍니다.
+import base64
+import os
 import random
 import string
 import json
-import threading
-import requests
-from typing import IO
+import tempfile
 import logging
+from typing import List, Tuple, Dict, Optional, Any
 
-from config import WebhookConfig
-from schema import Schema, Verdict
-from schema.webhook_event import TestCaseResult, JobCancellation, Error, SubmissionResult
+from common import TEST_CASES, TEST_CASE_EXECUTION_MEMORY_LIMIT, TEST_CASE_EXECUTION_TIME_LIMIT
+from config import DockerConfig
+from schema import Verdict
+from schema.webhook_event import TestCaseResult, Error, SubmissionResult
 from schema.job import CodeChallengeJudgmentJob as Job
 from redisutil.repository import job_repository
+from worker.webhook_manager import AsyncWebhookManager
 
 
-def create_random_string(length: int = 8) -> str:
+def _create_random_string(length: int = 8) -> str:
+    """랜덤 문자열 생성 (소문자 + 숫자 조합)
+
+    Args:
+        length (int): 생성할 문자열 길이 (기본값 8)
+
+    Returns:
+        str: 생성된 랜덤 문자열
+
+    Notes:
+
+
+    Example:
+        >>> _create_random_string(6)
+        'a3b8f2'
+    """
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
 
-def build_docker_run_cmd(
+def _build_docker_run_cmd(
     tmp_code_path: str,
     docker_image_name: str,
     test_cases: tuple[tuple[list, str]],
     test_case_memory_limit_mb: int,
-    test_case_time_limit_sec: float
+    test_case_time_limit_sec: float,
+    cpu_core_limit: float = 0.5
 ) -> list[str]:
-    tmpfs_path = f"/tmp/{create_random_string(length=16)}"
+    """도커 실행 명령어 생성 함수
 
-    # 사양에 따라 min 값을 1정도로 할당 해도 괜찮음
+    코드 채점을 위한 도커 컨테이너 실행 명령어를 생성합니다. 보안 및 리소스 제한 설정을 포함합니다.
+
+    Args:
+        tmp_code_path (str): temp 코드 파일 경로
+        docker_image_name (str): 사용할 도커 이미지 이름
+        test_cases (tuple): 테스트 케이스 튜플 (입력값, 기대출력) 리스트
+        test_case_memory_limit_mb (int): 테스트케이스 메모리 제한(MB)
+        test_case_time_limit_sec (float): 테스트케이스 실행 시간 제한(초)
+        cpu_core_limit (float): 실행 환경 할당 CPU 코어 수
+
+    Notes:
+        cpu_core_limit의 경우 사양에 따라 min 값을 1정도로 기본 값을 할당 해도 괜찮음
+        또는 외부에서 테스트 케이스 별로 설정하는 방식으로 사용 가능
+
+    Returns:
+        list[str]: 도커 실행 명령어 리스트
+    """
+    tmpfs_path = f"/tmp/{_create_random_string(length=16)}"
+
+
     # 문제에 따라 조정이 필요한 경우 다른 상수 값 처럼 문제 별로 설정한 값을 할당할 것
-    test_case_cpu_core_limit: float = 0.5
     pids_limit = 300
 
     return [
@@ -38,8 +76,8 @@ def build_docker_run_cmd(
         "--mount", f"type=bind,source={tmp_code_path},target=/tmp/code,readonly",   # 코드는 파일로 전달
         "--mount", f"type=tmpfs,destination={tmpfs_path}",                          # 컨테이너 내부에서 쓰기 가능한 마운트 경로 설정
         "--read-only",                                                              # 파일 시스템은 기본적으로 읽기 전용 설정
-        "--memory", f"{test_case_memory_limit_mb + 64}m",                                   # 컨테이너 메모리 제한
-        "--cpus", f"{test_case_cpu_core_limit}",                                    # CPU 코어 수 제한 (서버 사양에 따라 여유가 있다면 1로 설정해도 괜찮음)
+        "--memory", f"{test_case_memory_limit_mb + 64}m",                           # 컨테이너 메모리 제한
+        "--cpus", f"{cpu_core_limit}",                                    # CPU 코어 수 제한 (서버 사양에 따라 여유가 있다면 1로 설정해도 괜찮음)
         "--pids-limit", f"{pids_limit}",                                            # 프로세스 수 제한
         "--cap-drop", "ALL",                                                        # 기본적으로 부여되는 모든 권한을 제거하고, 최소한의 권한만 사용하도록 설정
         docker_image_name,                                                          # 도커 이미지 설정
@@ -52,103 +90,183 @@ def build_docker_run_cmd(
     ]
 
 
-def send_webhook(webhook_event_schema: Schema):
-    try:
-        if type(webhook_event_schema) is TestCaseResult:
-            endpoint = WebhookConfig.WEBHOOK_NOTIFY_VERDICT_ENDPOINT
-        elif type(webhook_event_schema) is SubmissionResult:
-            endpoint = WebhookConfig.WEBHOOK_NOTIFY_SUBMISSION_RESULT_ENDPOINT
-        else:
-            endpoint = WebhookConfig.WEBHOOK_NOTIFY_ERROR_ENDPOINT
+async def handle_webhook_response(
+    future: asyncio.Future,
+    proc: asyncio.subprocess.Process,
+    cleanup_job_and_return_event: asyncio.Event,
+    job_id: str
+) -> None:
+    """웹훅 응답 처리 코루틴
 
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(endpoint, json=webhook_event_schema.as_dict(), headers=headers, timeout=10)
+    웹훅 전송 결과를 처리하고 실패 시 리소스 정리 작업을 수행합니다.
 
-        # HTTP 관련 에러 발생 시 예외 raise
-        response.raise_for_status()
+    Args:
+        future (Future): 웹훅 전송 Future 객체
+        proc (Process): 실행 중인 도커 프로세스
+        cleanup_job_and_return_event (Event): 채점 실패/불가한 경우, 리소스 정리 및 메인 프로세스 종료를 예약하기 위한 이벤트
+        job_id (str): 작업 ID
 
-        return response.status_code
-    except requests.exceptions.RequestException as e:
-        return getattr(e.response, "status_code", 500)
+    Returns:
+        None
+    """
+    response_code = await future
+    if response_code != 200:
+        logging.error(f"Webhook failed with code {response_code} for job {job_id}")
+        if proc.returncode is None:  # 프로세스가 아직 살아있을 때만 kill
+            proc.kill()
+        cleanup_job_and_return_event.set()
 
 
-def handle_output(
-    pipe: IO,
-    pipe_name: str,
-    sandbox_proc,
-    cleanup_job_event: threading.Event,
-    user_id: int,
+async def async_handle_output(
+    stream: asyncio.StreamReader,
+    proc: asyncio.subprocess.Process,
+    cleanup_job_and_return_event,
     job_id: str,
     verdicts: list[Verdict],
-):
+    webhook_manager: AsyncWebhookManager,
+    tasks: List[asyncio.Task]
+) -> None:
     try:
-        # pipe.readline()은 동기 호출로 동작, 새로운 출력이 pipe에 추가될 때 까지 대기
-        for line in iter(pipe.readline, ''):
-            last_job_data = job_repository.find_by_user_id_and_job_id(user_id, job_id)
-            if not last_job_data:
-                sandbox_proc.kill()
-
-                logging.error(f"[{job_id} 작업이 실행 중 만료되었습니다.]")
-                send_webhook(Error(job_id, "작업이 만료되었습니다"))
+        while True:
+            line = await stream.readline()
+            if not line:
                 break
 
-            if last_job_data.stop_flag:
-                sandbox_proc.kill()
-                cleanup_job_event.set()
-
-                logging.info(f'[{job_id} 작업을 중단합니다.]')
-                send_webhook(JobCancellation(job_id))
-                break
-
-            if line and line.startswith("VERDICT:"):
+            line = line.decode().strip()
+            if line.startswith("VERDICT:"):
                 verdict = Verdict.create_from_dict(json.loads(line[len("VERDICT:"):]))
                 verdicts.append(verdict)
 
-                updated_job = job_repository.update(
-                    job_id,
-                    user_id,
-                    last_test_case_index=verdict.test_case_index,
-                    verdicts=verdicts
-                )
+                webhook_event = TestCaseResult(job_id, verdict)
+                future = asyncio.ensure_future(webhook_manager.send_webhook(webhook_event))
+                tasks.append(asyncio.create_task(handle_webhook_response(future, proc, cleanup_job_and_return_event, job_id)))
 
-                if updated_job == -1:
-                    sandbox_proc.kill()
+            elif line.startswith("SYSTEM_ERROR:"):
+                error_dict = json.loads(line[len("SYSTEM_ERROR:"):])
+                logging.error(f"[Unexpected error in sandbox for job {job_id}. Error: {error_dict['error']}]")
 
-                    logging.error(f"[{job_id} 작업이 실행 중 만료되었습니다.]")
-                    send_webhook(Error(job_id, "작업이 만료되었습니다"))
-                    break
-                elif updated_job == 0:
-                    sandbox_proc.kill()
-                    cleanup_job_event.set()
-
-                    logging.error(f"[{job_id} 작업 정보 업데이트 과정에서 발생한 오류가 없지만 실제 작업은 업데이트 되지 않았습니다.]")
-                    send_webhook(Error(job_id))
-                    break
-
-                response_code = send_webhook(TestCaseResult(job_id, verdict))
-                if response_code != 200:
-                    sandbox_proc.kill()
-                    cleanup_job_event.set()
-
-                    logging.info(f"[현재 {job_id} 작업 채점 결과를 수신할 수 있는 사용자가 없습니다. 작업이 잠시후 종료됩니다. 응답 코드: {response_code}]")
-                    break
-
-            elif line and line.startswith("SYSTEM_ERROR:"):
-                system_error = (json.loads(line[len("SYSTEM_ERROR:"):]))["error"]
-                logging.error(f"[{job_id} 작업 실행 중 하위 프로세스에서 치명적 오류가 발생했습니다. 오류: {system_error}]")
-
-                # SYSTEM_ERROR 메시지 출력 후 해당 프로세스는 종료됨, sandbox_proc.kill()이 필요 없음
-                cleanup_job_event.set()
-
-                send_webhook(Error(job_id))
+                # proc.kill()은 생략해도 ok (proc은 SYSTEM_ERROR 출력 후 자동으로 종료됨)
+                cleanup_job_and_return_event.set()
+                await webhook_manager.send_webhook(Error(job_id))
                 break
 
             else:
-                # 프로세스 실행 중 컨테이너 내부 코드 실행 파이썬 스크립트 외적인 요인으로 발생한 stderr 처리
-                raise Exception(line.rstrip())
-    except Exception as ex:
-        sandbox_proc.kill()
-        cleanup_job_event.set()
+                raise Exception(f"Unexpected output: {line}")
 
-        logging.error(f"[{job_id} 작업 출력 처리 중 하위 스레드에서 처리되지 않은 예외 발생]", exc_info=True)
-        send_webhook(Error(job_id))
+    except Exception as ex:
+        logging.error(f"[{job_id} Output handling error]", exc_info=True)
+
+        proc.kill()
+        cleanup_job_and_return_event.set()
+        await webhook_manager.send_webhook(Error(job_id))
+
+async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebhookManager):
+    try:
+        # 코드 디코딩 및 준비
+        code_decoded = base64.b64decode(job.code).decode("utf-8")
+        test_cases = TEST_CASES[job.challenge_id]
+
+        # 임시 파일 생성
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as tmp:
+            tmp.write(code_decoded)
+            tmp_code_path = tmp.name
+
+        # Docker 명령어 생성
+        docker_cmd = _build_docker_run_cmd(
+            tmp_code_path,
+            DockerConfig.DOCKER_IMAGE[job.code_language],
+            random.sample(test_cases, len(test_cases)),
+            TEST_CASE_EXECUTION_MEMORY_LIMIT[job.challenge_id],
+            TEST_CASE_EXECUTION_TIME_LIMIT[job.challenge_id]
+        )
+
+        # 비동기 서브프로세스 실행
+        sandbox_proc = await asyncio.create_subprocess_exec(
+            *docker_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        tasks = []
+        verdicts = []
+        cleanup_job_and_return_event = asyncio.Event()
+
+        # 출력 처리 백그라운드 작업 실행
+        # asyncio에 의해 자동으로 스케줄링
+        stdout_task = asyncio.create_task(
+            async_handle_output(sandbox_proc.stdout, sandbox_proc, cleanup_job_and_return_event, job.job_id, verdicts, webhook_manager, tasks)
+        )
+        stderr_task = asyncio.create_task(
+            async_handle_output(sandbox_proc.stderr, sandbox_proc, cleanup_job_and_return_event, job.job_id, verdicts, webhook_manager, tasks)
+        )
+
+        tasks.append(stdout_task)
+        tasks.append(stderr_task)
+
+        # 샌드박스 타임아웃 설정
+        max_compile_time_limit = 5.0
+        total_timeout = len(test_cases) * TEST_CASE_EXECUTION_TIME_LIMIT[job.challenge_id] + max_compile_time_limit + 5.0 # 오버 헤드 감안 5.0초 추가 할당
+        try:
+            await asyncio.wait_for(sandbox_proc.wait(), timeout=total_timeout)
+        except asyncio.TimeoutError:
+            # sandbox_proc에 SIGKILL 전달
+            # 프로세스가 종료, 도커 관련 리소스는 Docker 데몬이 백그라운드에서 처리
+            sandbox_proc.kill()
+            cleanup_job_and_return_event.set()
+            await webhook_manager.send_webhook(Error(job.job_id, "실행 가능한 최대 허용 시간을 초과하였습니다"))
+
+        # Thread.join()과 유사하게, 백그라운드 작업(모든 테스트 케이스에 대한 verdict 전달) 완료 시점까지 대기
+        await asyncio.gather(*tasks)
+
+        # 하위 task의 채점 실패/불가 이벤트 확인
+        if cleanup_job_and_return_event.is_set():
+            job_repository.delete(job.job_id, user_id)
+            return
+
+        overall_pass = True
+        max_memory_used_mb = -1.0
+        max_elapsed_time_sec = -1.0
+        compile_error = None
+        runtime_error = None
+
+        for verdict in verdicts:
+            if verdict.compile_error or verdict.runtime_error or not verdict.passed:
+                overall_pass = False
+                max_memory_used_mb = None
+                max_elapsed_time_sec = None
+                compile_error = verdict.compile_error
+                runtime_error = verdict.runtime_error
+                break
+
+            d = verdict.as_dict()
+            max_memory_used_mb = max(max_memory_used_mb, d.get('memoryUsedMb'))
+            max_elapsed_time_sec = max(max_elapsed_time_sec, d.get('elapsedTimeSec'))
+
+        # 최종 채점 결과 전송
+        result = SubmissionResult(
+            user_id=user_id,
+            job_id=job.job_id,
+            challenge_id=job.challenge_id,
+            code_language=job.code_language,
+            code=job.code,
+            code_byte_size=len(job.code),
+            overall_pass=overall_pass,
+            max_memory_used_mb=max_memory_used_mb,
+            max_elapsed_time_sec=max_elapsed_time_sec,
+            compile_error=compile_error,
+            runtime_error=runtime_error,
+            submitted_at=job.submitted_at
+        )
+
+        await webhook_manager.send_webhook(result)
+        job_repository.delete(job.job_id, user_id)
+
+    # finally는 os._exit(code)를 호출하는 경우(os.exit(code)와 다름)를 제외하고
+    # 항상 실행 됨
+    finally:
+        await webhook_manager.shutdown()
+        if tmp_code_path and os.path.exists(tmp_code_path):
+            os.remove(tmp_code_path)
+        # asyncio의 이벤트 루프가 프로세스 종료 시(sandbox_proc.returncode가 설정된 후),
+        # 내부적으로 파이프(sandbox_proc.stdout, sandbox_proc.stderr)는 자동으로 close
+        # subprocess.Popen를 직접 사용하는 경우, pipe 수명 관리를 직접 해야함
