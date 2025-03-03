@@ -56,21 +56,67 @@ def parse_time_output(time_output_file_name: str) -> tuple[float, int]:
         )
 
 
-def get_file_extension(filename: str) -> str:
-    """
-        파일명에서 확장자를 추출합니다.
+def parse_python_compile_error_message(stderr: str):
+    lines = stderr.split("\n")
+    error_message = None
+    for i, line in enumerate(lines):
+        if "py_compile.PyCompileError:" in line:
+            # "py_compile.PyCompileError:" 이후 첫 번째 공백이 아닌 문자 찾기
+            extracted_message_in_curr_line = line.split("py_compile.PyCompileError:", 1)[1].strip()
+            if extracted_message_in_curr_line:
+                error_message = extracted_message_in_curr_line + "\n" + "\n".join(lines[i + 1:]).strip()
+            else:
+                error_message = "\n".join(lines[i + 1:]).strip()
+            break
 
-        Args:
-            filename (str): 파일 경로 또는 파일명 (예: "/tmp/tmp123.java", "main.js").
-
-        Returns:
-            str: 파일 확장자 (예: ".java", ".js"). 확장자가 없으면 빈 문자열 ("") 반환.
-        """
-    _, extension = os.path.splitext(filename)
-    return extension.lower()  # 소문자로 변환하여 일관성 유지
+    return error_message
 
 
-def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_case_time_limit: float, javascript_filename: str):
+# 일반적으로 python은 실행 시 컴파일과 실행이 동시에 이루어지고, 이를 별도로 실행하진 않지만
+# 코딩 테스트 채점을 위해 컴파일 과정 분리
+# python 컴파일 시간 제한은 실행 시간 제한과 별도로 적정하게 설정할 것
+def compile_python_code(compile_time_limit: float=5.0):
+    compile_cmd = [
+        "python3",
+        "-c",
+        "import py_compile; py_compile.compile(r'main.py', doraise=True)"  # 컴파일 에러 발생 시 예외를 발생, subprocess가 비정상 종료 유도
+    ]
+    try:
+        # 서브 프로세스 동기적 실행(subprocess.run)
+        # 다음 라인으로 넘어가면 서브 프로세스는 종료된 상태임
+        proc_compile = subprocess.run(
+            compile_cmd,
+            capture_output=True,
+            text=True,
+            timeout=compile_time_limit,
+            encoding='utf-8',
+            errors='replace',
+        )
+        if proc_compile.returncode != 0:
+            # 힙 메모리 제한 초과 케이스의 경우, Python 내부적으로 MemoryError를 발생시켜 처리하므로 JS 처럼 별도의 stderr 분석은 필요 없음
+            # 내부 로직에서 메모리 할당 실패로 인한 Segmentation Fault이 발생한 경우 : -11 or 139
+            # 컨테이너 메모리 상한 초과로 인해 SIGKILL이 호출되어 강제로 종료될 경우 : -9
+            if proc_compile.returncode == -9 or proc_compile.returncode == -11 or proc_compile.returncode == 137 or "Killed" in proc_compile.stderr:
+                compile_error_message = "컴파일 메모리 사용량 최대 허용 한도 초과"
+            else:
+                compile_error_message = parse_python_compile_error_message(proc_compile.stderr)
+            print_verdict(
+                False,
+                compile_error=compile_error_message
+            )
+    except subprocess.TimeoutExpired:
+        print_verdict(
+            False,
+            compile_error=f"컴파일 실행 시간 최대 허용 한도 초과"
+        )
+    except Exception as ex:
+        print_system_error(
+            f"Unexpected exception occurred during compilation: {str(ex)}",
+            return_code=1
+        )
+
+
+def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_case_time_limit: float):
     for idx, tc in enumerate(test_cases):
         inputs: list[str] = tc[0]
         expected_result: str = tc[1]
@@ -79,8 +125,8 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
 
         execute_cmd = [
             "/usr/bin/time", "-f", "%e %M", "-o", time_output_file_name,    # /usr/bin/time 유틸리티를 사용하여 실행하는 프로세스의 리소스 사용 통계를 얻음
-            "node",
-            javascript_filename
+            "python3",
+            "main.py"
         ]
 
         try:
@@ -103,12 +149,8 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
                         return_code=1
                     )
                 else:
-                    if "JavaScript heap out of memory" in proc_run.stderr:
-                        runtime_error_message = "JavaScript heap out of memory"
-                    # 내부 로직에서 메모리 할당 실패로 인한 Segmentation Fault이 발생한 경우 : -11 or 139
-                    # 컨테이너 메모리 상한 초과로 인해 SIGKILL이 호출되어 강제로 종료될 경우 : -9
-                    elif proc_run.returncode == -9 or proc_run.returncode == -11 or proc_run.returncode == 137 or "Killed" in proc_run.stderr:
-                            runtime_error_message = "런타임 메모리 사용량 최대 허용 한도 초과"
+                    if proc_run.returncode == -9 or proc_run.returncode == -11 or proc_run.returncode == 137 or "Killed" in proc_run.stderr:
+                        runtime_error_message = "런타임 메모리 사용량 최대 허용 한도 초과"
                     else:
                         runtime_error_message = proc_run.stderr.rstrip()
                     print_verdict(
@@ -218,10 +260,9 @@ def process_arguments():
             return_code=1
         )
 
-    # 7) 자바스크립트 파일 생성
+    # 7) 파이썬 파일 생성
     try:
-        javascript_filename = f"main{get_file_extension(code_filename)}"
-        with open(javascript_filename, "w", encoding="utf-8") as f:
+        with open("main.py", "w", encoding="utf-8") as f:
             f.write(code)
     except Exception as e:
         print_system_error(
@@ -229,12 +270,13 @@ def process_arguments():
             return_code=1
         )
 
-    return test_case_memory_limit, test_cases, test_case_time_limit, javascript_filename
+    return test_case_memory_limit, test_cases, test_case_time_limit
 
 
 def main():
-    test_case_memory_limit, test_cases, test_case_time_limit, javascript_filename = process_arguments()
-    execute_with_test_cases(test_cases, test_case_memory_limit, test_case_time_limit, javascript_filename)
+    test_case_memory_limit, test_cases, test_case_time_limit = process_arguments()
+    compile_python_code()
+    execute_with_test_cases(test_cases, test_case_memory_limit, test_case_time_limit)
 
 
 if __name__ == "__main__":

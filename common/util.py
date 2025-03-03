@@ -17,7 +17,8 @@ def get_time_bonus_by_language(code_language: str, challenge_id: int=None):
     time_bonus = {
         'java17': 1.0,
         'nodejs20': 0.0,
-        'nodejs20esm': 0.0
+        'nodejs20esm': 0.0,
+        'python3': 0.0,
     }
 
     return time_bonus[code_language]

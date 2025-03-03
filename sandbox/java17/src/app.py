@@ -77,16 +77,17 @@ def compile_java_code(compile_time_limit: float = 5.0):
             errors='replace',
         )
         if proc_compile.returncode != 0:
-            if proc_compile.returncode == -9 or "Killed" in proc_compile.stderr:
-                print_verdict(
-                    False,
-                    compile_error="컴파일 메모리 사용량 최대 허용 한도 초과"
-                )
+            # 힙 메모리 제한 초과 케이스의 경우, Java 내부적으로 예외를 발생시켜 처리하므로 JS 처럼 별도의 stderr 분석은 필요 없음
+            # 내부 로직에서 메모리 할당 실패로 인한 Segmentation Fault이 발생한 경우 : -11 or 139
+            # 컨테이너 메모리 상한 초과로 인해 SIGKILL이 호출되어 강제로 종료될 경우 : -9
+            if proc_compile.returncode == -9 or proc_compile.returncode == -11 or proc_compile.returncode == 137 or "Killed" in proc_compile.stderr:
+                compile_error_message = "컴파일 메모리 사용량 최대 허용 한도 초과"
             else:
-                print_verdict(
-                    False,
-                    compile_error=proc_compile.stderr.rstrip()
-                )
+                compile_error_message = proc_compile.stderr.rstrip()
+            print_verdict(
+                False,
+                compile_error=compile_error_message
+            )
     except subprocess.TimeoutExpired:
         print_verdict(
             False,
@@ -134,8 +135,7 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
                         return_code=1
                     )
                 else:
-                    # 힙 메모리 제한 초과 시 Java 내부적으로 예외를 발생시켜 처리하므로 별개의 stderr 분석이 필요 없음
-                    if proc_run.returncode == -9 or "Killed" in proc_run.stderr:
+                    if proc_run.returncode == -9 or proc_run.returncode == -11 or proc_run.returncode == 137 or "Killed" in proc_run.stderr:
                         runtime_error_message = "런타임 메모리 사용량 최대 허용 한도 초과"
                     else:
                         runtime_error_message=proc_run.stderr.rstrip()

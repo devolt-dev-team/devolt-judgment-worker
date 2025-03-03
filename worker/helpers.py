@@ -176,7 +176,8 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
         file_extension = {
             'java17': '.java',
             'nodejs20': '.js',  # CommonJS
-            'nodejs20esm': '.mjs'  # ESM
+            'nodejs20esm': '.mjs',  # ESM
+            'python3': '.py',
         }.get(job.code_language)
 
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix=file_extension) as tmp:
