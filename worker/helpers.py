@@ -7,7 +7,7 @@ import json
 import tempfile
 import logging
 
-from common import TEST_CASES, TEST_CASE_EXECUTION_MEMORY_LIMIT, TEST_CASE_EXECUTION_TIME_LIMIT
+from common import *
 from config import DockerConfig
 from schema import Verdict
 from schema.webhook_event import TestCaseResult, Error, SubmissionResult
@@ -69,7 +69,6 @@ def _build_docker_run_cmd(
     # tmpfs 경로 설정
     tmpfs_path = f"/tmp/{_create_random_string()}"
 
-
     # 문제에 따라 조정이 필요한 경우 다른 상수 값 처럼 문제 별로 설정한 값을 할당할 것
     pids_limit = 300
 
@@ -79,7 +78,7 @@ def _build_docker_run_cmd(
         "--mount", f"type=bind,source={tmp_code_path},target=/tmp/{code_filename},readonly",    # 코드는 파일로 전달, /tmp는 Linux 표준 임시 디렉토리
         "--mount", f"type=tmpfs,destination={tmpfs_path}",                                      # 컨테이너 내부에서 쓰기 가능한 tmpfs 마운트 경로 설정, 메모리 기반 파일 시스템
         "--read-only",                                                                          # 파일 시스템은 기본적으로 읽기 전용 설정
-        "--memory", f"{test_case_memory_limit_mb + 64}m",                                       # 컨테이너 메모리 제한 (컨테이너 유지 비용, time 실행 비용, tmpfs 유지 비용을 고려, 여유분 64mb 추가 할당)
+        "--memory", f"{test_case_memory_limit_mb + 64}m",                                       # 컨테이너 메모리 제한 (컨테이너 유지 비용, time 실행 비용, tmpfs 유지 비용을 고려, 여유분 64mb 추가 할당), 내부 하위 프로세스는 메모리 사용 초과 시 SIGKILL 처리 되어 -9 반환하고 종료됨
         "--cpus", f"{cpu_core_limit}",                                                          # CPU 코어 수 제한 (서버 사양에 따라 여유가 있다면 1로 설정해도 괜찮음)
         "--pids-limit", f"{pids_limit}",                                                        # 프로세스 수 제한
         "--cap-drop", "ALL",                                                                    # 기본적으로 부여되는 모든 권한을 제거하고, 최소한의 권한만 사용하도록 설정
@@ -137,7 +136,7 @@ async def async_handle_output(
                 break
 
             line = line.decode('utf-8').strip()
-            print(line)
+            logging.info(f"[DEBUG]Output from sandbox process:{line}")
 
             if line.startswith("VERDICT:"):
                 verdict = Verdict.create_from_dict(json.loads(line[len("VERDICT:"):]))
@@ -184,13 +183,16 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
             tmp.write(code_decoded)
             tmp_code_path = tmp.name
 
+        test_case_memory_limit = TEST_CASE_EXEC_MEM_LIMIT[job.challenge_id] + get_memory_bonus_by_language(job.code_language, job.challenge_id)
+        test_case_time_limit = TEST_CASE_EXEC_TIME_LIMIT[job.challenge_id] + get_time_bonus_by_language(job.code_language)
+
         # Docker 명령어 생성
         docker_cmd = _build_docker_run_cmd(
             tmp_code_path,
             DockerConfig.DOCKER_IMAGE[job.code_language],
             random.sample(test_cases, len(test_cases)),
-            TEST_CASE_EXECUTION_MEMORY_LIMIT[job.challenge_id],
-            TEST_CASE_EXECUTION_TIME_LIMIT[job.challenge_id]
+            test_case_memory_limit,
+            test_case_time_limit
         )
 
         # 비동기 서브프로세스 실행
@@ -218,7 +220,7 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
 
         # 샌드박스 타임아웃 설정
         max_compile_time_limit = 5.0
-        total_timeout = len(test_cases) * TEST_CASE_EXECUTION_TIME_LIMIT[job.challenge_id] + max_compile_time_limit + 5.0 # 오버 헤드 감안 5.0초 추가 할당
+        total_timeout = len(test_cases) * test_case_time_limit + max_compile_time_limit + 10.0 # 오버 헤드 감안 10.0초 추가 할당
         try:
             await asyncio.wait_for(sandbox_proc.wait(), timeout=total_timeout)
         except asyncio.TimeoutError:
@@ -226,7 +228,7 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
             # 프로세스가 종료, 도커 관련 리소스는 Docker 데몬이 백그라운드에서 처리
             sandbox_proc.kill()
             cleanup_job_and_return_event.set()
-            await webhook_manager.send_webhook(Error(job.job_id, "실행 가능한 최대 허용 시간을 초과하였습니다"))
+            await webhook_manager.send_webhook(Error(job.job_id, "채점 실행 시간 최대 허용 한도 초과"))
 
         # Thread.join()과 유사하게, 백그라운드 작업(모든 테스트 케이스에 대한 verdict 전달) 완료 시점까지 대기
         await asyncio.gather(*tasks)

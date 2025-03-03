@@ -2,7 +2,6 @@ import os
 import sys
 import subprocess
 import json
-import ast
 
 
 # 테스트 케이스 채점 결과 출력
@@ -81,8 +80,6 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
         execute_cmd = [
             "/usr/bin/time", "-f", "%e %M", "-o", time_output_file_name,    # /usr/bin/time 유틸리티를 사용하여 실행하는 프로세스의 리소스 사용 통계를 얻음
             "node",
-            f"--max-old-space-size={test_case_memory_limit}",               # 최대 힙 메모리 지정
-            "--stack-size=1024",                                            # stack 최대 size 지정
             javascript_filename
         ]
 
@@ -106,10 +103,10 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
                         return_code=1
                     )
                 else:
-                    # 힙 메모리 제한 초과 시 JavaScript heap out of memory 발생하므로
-                    # 별도로 메모리 초과 케이스를 조건문으로 필터링 하지 않아도 OK
                     if "JavaScript heap out of memory" in proc_run.stderr:
                         runtime_error_message = "JavaScript heap out of memory"
+                    elif proc_run.returncode == -9 or "Killed" in proc_run.stderr:
+                        runtime_error_message = "런타임 메모리 사용량 최대 허용 한도 초과"
                     else:
                         runtime_error_message = proc_run.stderr.rstrip()
                     print_verdict(
@@ -122,7 +119,7 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
             print_verdict(
                 False,
                 test_case_index=idx+1,
-                runtime_error=f"실행 시간 제한 {test_case_time_limit}초 초과"
+                runtime_error=f"런타임 실행 시간 통과 기준 {test_case_time_limit}초 초과"
             )
             continue
         except Exception as e:
@@ -136,12 +133,21 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
         # time 유틸의 출력에서 메모리 사용량과 실행 시간 기록 파싱
         elapsed_time_sec, mem_used_kb = parse_time_output(time_output_file_name)
 
-        print_verdict(
-            passed=(user_code_output == expected_result),
-            test_case_index=idx + 1,
-            memory_used_mb=round(mem_used_kb / 1024.0, 2),
-            elapsed_time_sec=elapsed_time_sec if elapsed_time_sec <= test_case_time_limit else test_case_time_limit
-        )
+        # 메모리 제한 초과 체크 및 결과 출력
+        memory_used_mb = round(mem_used_kb / 1024.0, 2)
+        if memory_used_mb > test_case_memory_limit:
+            print_verdict(
+                False,
+                test_case_index=idx + 1,
+                runtime_error=f"런타임 메모리 사용량 통과 기준 {test_case_memory_limit}mb 초과"
+            )
+        else:
+            print_verdict(
+                passed=(user_code_output == expected_result),
+                test_case_index=idx + 1,
+                memory_used_mb=round(mem_used_kb / 1024.0, 2),
+                elapsed_time_sec=elapsed_time_sec if elapsed_time_sec <= test_case_time_limit else test_case_time_limit
+            )
 
 
 def process_arguments():

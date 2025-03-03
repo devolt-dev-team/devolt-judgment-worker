@@ -8,6 +8,6 @@ class DockerConfig:
     """
     DOCKER_IMAGE = {
         "java17": get_env_var("SANDBOX_IMAGE_JAVA17"),
-        "nodejs": get_env_var("SANDBOX_IMAGE_NODEJS20"),
-        "nodejsesm": get_env_var("SANDBOX_IMAGE_NODEJS20"),
+        "nodejs20": get_env_var("SANDBOX_IMAGE_NODEJS20"),
+        "nodejs20esm": get_env_var("SANDBOX_IMAGE_NODEJS20"),
     }

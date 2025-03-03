@@ -219,7 +219,7 @@ TEST_CASES = {
     )
 }
 
-TEST_CASE_EXECUTION_TIME_LIMIT = {
+TEST_CASE_EXEC_TIME_LIMIT = {
     1: 1.0,
     2: 1.0,
     3: 1.0,
@@ -241,7 +241,7 @@ TEST_CASE_EXECUTION_TIME_LIMIT = {
 
 # 64MB 정도면 간단한 알고리즘 문제는 대부분 해결 가능 => 문자열 조작, 단순 수학 계산, 재귀 깊이가 낮은 문제 등.
 # 128MB ~ 256MB 정도로 잡으면, 조금 더 복잡한 자료구조나, BFS/DFS 같은 탐색 문제도 커버 가능.
-TEST_CASE_EXECUTION_MEMORY_LIMIT = {
+TEST_CASE_EXEC_MEM_LIMIT = {
     1: 64,
     2: 64,
     3: 64,
