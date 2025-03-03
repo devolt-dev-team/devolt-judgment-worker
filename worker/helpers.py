@@ -63,29 +63,34 @@ def _build_docker_run_cmd(
     Returns:
         list[str]: 도커 실행 명령어 리스트
     """
-    tmpfs_path = f"/tmp/{_create_random_string(length=16)}"
+    # 코드 임시 파일에서 경로 제거, 파일 이름만 추출
+    code_filename = os.path.basename(tmp_code_path)
+
+    # tmpfs 경로 설정
+    tmpfs_path = f"/tmp/{_create_random_string()}"
 
 
     # 문제에 따라 조정이 필요한 경우 다른 상수 값 처럼 문제 별로 설정한 값을 할당할 것
     pids_limit = 300
 
     return [
-        "docker", "run", "--rm", "-t",                                              # --rm: 컨테이너가 종료될 때 컨테이너와 관련된 리소스(파일 시스템, 볼륨) 제거, -t: 컨테이너 출력을 즉시 read하기 위해 컨테이너에 가상 TTY 할당하고 subprocess의 I/O 스트림과 직접 연결
-        "--network", "none",                                                        # 네트워크 차단
-        "--mount", f"type=bind,source={tmp_code_path},target=/tmp/code,readonly",   # 코드는 파일로 전달
-        "--mount", f"type=tmpfs,destination={tmpfs_path}",                          # 컨테이너 내부에서 쓰기 가능한 마운트 경로 설정
-        "--read-only",                                                              # 파일 시스템은 기본적으로 읽기 전용 설정
-        "--memory", f"{test_case_memory_limit_mb + 64}m",                           # 컨테이너 메모리 제한
-        "--cpus", f"{cpu_core_limit}",                                    # CPU 코어 수 제한 (서버 사양에 따라 여유가 있다면 1로 설정해도 괜찮음)
-        "--pids-limit", f"{pids_limit}",                                            # 프로세스 수 제한
-        "--cap-drop", "ALL",                                                        # 기본적으로 부여되는 모든 권한을 제거하고, 최소한의 권한만 사용하도록 설정
-        docker_image_name,                                                          # 도커 이미지 설정
+        "docker", "run", "--rm", "-t",                                                          # --rm: 컨테이너가 종료될 때 컨테이너와 관련된 리소스(파일 시스템, 볼륨) 제거, -t: 컨테이너 출력을 즉시 read하기 위해 컨테이너에 가상 TTY 할당하고 subprocess의 I/O 스트림과 직접 연결
+        "--network", "none",                                                                    # 네트워크 차단
+        "--mount", f"type=bind,source={tmp_code_path},target=/tmp/{code_filename},readonly",    # 코드는 파일로 전달, /tmp는 Linux 표준 임시 디렉토리
+        "--mount", f"type=tmpfs,destination={tmpfs_path}",                                      # 컨테이너 내부에서 쓰기 가능한 tmpfs 마운트 경로 설정, 메모리 기반 파일 시스템
+        "--read-only",                                                                          # 파일 시스템은 기본적으로 읽기 전용 설정
+        "--memory", f"{test_case_memory_limit_mb + 64}m",                                       # 컨테이너 메모리 제한 (컨테이너 유지 비용, time 실행 비용, tmpfs 유지 비용을 고려, 여유분 64mb 추가 할당)
+        "--cpus", f"{cpu_core_limit}",                                                          # CPU 코어 수 제한 (서버 사양에 따라 여유가 있다면 1로 설정해도 괜찮음)
+        "--pids-limit", f"{pids_limit}",                                                        # 프로세스 수 제한
+        "--cap-drop", "ALL",                                                                    # 기본적으로 부여되는 모든 권한을 제거하고, 최소한의 권한만 사용하도록 설정
+        docker_image_name,                                                                      # 도커 이미지 설정
 
         # Dockerfile에 설정된 ENTRYPOINT과 함께 전달할 argument 목록
-        tmpfs_path,                                                                 # tmpfs 마운트 경로 전달
-        json.dumps(test_cases),                                                     # 테스트 케이스 별 input, 정답을 유지하는 튜플 JSON 직렬화
-        str(test_case_memory_limit_mb),                                             # 테스트 케이스 메모리 제한
-        str(test_case_time_limit_sec)                                               # 테스트 케이스 실행 시간 제한
+        code_filename,                                                                          # 코드 임시 파일 경로
+        tmpfs_path,                                                                             # tmpfs 마운트 경로
+        json.dumps(test_cases),                                                                 # 테스트 케이스 입력 및 정답 튜플 (JSON 직렬화)
+        str(test_case_memory_limit_mb),                                                         # 테스트 케이스 메모리 제한
+        str(test_case_time_limit_sec)                                                           # 테스트 케이스 실행 시간 제한
     ]
 
 
@@ -132,6 +137,8 @@ async def async_handle_output(
                 break
 
             line = line.decode('utf-8').strip()
+            print(line)
+
             if line.startswith("VERDICT:"):
                 verdict = Verdict.create_from_dict(json.loads(line[len("VERDICT:"):]))
                 verdicts.append(verdict)
@@ -159,14 +166,21 @@ async def async_handle_output(
         cleanup_job_and_return_event.set()
         await webhook_manager.send_webhook(Error(job_id))
 
+
 async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebhookManager):
     try:
         # 코드 디코딩 및 준비
         code_decoded = base64.b64decode(job.code).decode("utf-8")
         test_cases = TEST_CASES[job.challenge_id]
 
-        # 임시 파일 생성
-        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False) as tmp:
+        # 소스 코드 파일 생성
+        file_extension = {
+            'java17': '.java',
+            'nodejs20': '.js',  # CommonJS
+            'nodejs20esm': '.mjs'  # ESM
+        }.get(job.code_language)
+
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False, suffix=file_extension) as tmp:
             tmp.write(code_decoded)
             tmp_code_path = tmp.name
 

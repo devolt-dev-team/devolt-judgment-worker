@@ -95,7 +95,7 @@ if __name__=='__main__':
         "jobId": "123-456",
         "stopFlag": False,
 
-        "codeLanguage": "java",
+        "codeLanguage": "java17",
         "code": "hi",
 
         "challengeId": 1,

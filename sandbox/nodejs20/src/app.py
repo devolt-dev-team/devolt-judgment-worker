@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import json
+import ast
 
 
 # 테스트 케이스 채점 결과 출력
@@ -56,45 +57,21 @@ def parse_time_output(time_output_file_name: str) -> tuple[float, int]:
         )
 
 
-# java 컴파일 시간 제한은 실행 시간 제한과 별도로 적정하게 설정할 것
-def compile_java_code(test_case_memory_limit: int, compile_time_limit: float = 5.0):
-    # xms: 초기 힙 사이즈, xmx: 최대 힙 사이즈, xss: 스레드 스택 사이즈 (보통 기본 1mb)
-    compile_cmd = ["javac", f"-J-Xms{test_case_memory_limit // 2}m", f"-J-Xmx{test_case_memory_limit}m", "-J-Xss1024k", "-encoding", "UTF-8", "Main.java"]
-    try:
-        # 서브 프로세스 동기적 실행(subprocess.run)
-        # 다음 라인으로 넘어가면 서브 프로세스는 종료된 상태임
-        proc_compile = subprocess.run(
-            compile_cmd,
-            capture_output=True,
-            text=True,
-            timeout=compile_time_limit,
-            encoding='utf-8',
-            errors='replace',
-        )
-        if proc_compile.returncode != 0:
-            if proc_compile.returncode == -9 or "Killed" in proc_compile.stderr:
-                print_verdict(
-                    False,
-                    compile_error="컴파일 메모리 제한 초과"
-                )
-            else:
-                print_verdict(
-                    False,
-                    compile_error=proc_compile.stderr.rstrip()
-                )
-    except subprocess.TimeoutExpired:
-        print_verdict(
-            False,
-            compile_error=f"컴파일 시간 제한 초과"
-        )
-    except Exception as ex:
-        print_system_error(
-            f"Unexpected exception occurred during compilation: {str(ex)}",
-            return_code=1
-        )
+def get_file_extension(filename: str) -> str:
+    """
+        파일명에서 확장자를 추출합니다.
+
+        Args:
+            filename (str): 파일 경로 또는 파일명 (예: "/tmp/tmp123.java", "main.js").
+
+        Returns:
+            str: 파일 확장자 (예: ".java", ".js"). 확장자가 없으면 빈 문자열 ("") 반환.
+        """
+    _, extension = os.path.splitext(filename)
+    return extension.lower()  # 소문자로 변환하여 일관성 유지
 
 
-def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_case_time_limit: float):
+def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_case_time_limit: float, javascript_filename: str):
     for idx, tc in enumerate(test_cases):
         inputs: list[str] = tc[0]
         expected_result: str = tc[1]
@@ -103,13 +80,10 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
 
         execute_cmd = [
             "/usr/bin/time", "-f", "%e %M", "-o", time_output_file_name,    # /usr/bin/time 유틸리티를 사용하여 실행하는 프로세스의 리소스 사용 통계를 얻음
-            "java",
-            f"-Xms{test_case_memory_limit // 2}m",                          # 초기 힙 메모리 지정, 코드 실행 초기에 불필요한 힙 확장이나 가비지 컬렉션을 줄일 수 있음
-            f"-Xmx{test_case_memory_limit}m",                               # 최대 힙 메모리 지정
-            "-Xss1024k",                                                    # thread 별 stack 최대 size 지정
-            "-Dfile.encoding=UTF-8",                                        # 기본 문자 인코딩이 UTF-8을 보장하도록 설정
-            "-XX:+UseSerialGC",                                             # 예측 가능한 성능과 낮은 GC 오버헤드를 위해 Serial GC 옵션을 사용하여 단일 스레드 GC 설정, openJDK 17은 64비트 Linux 환경에서 JVM이 Server 모드로 동작하며, GC는 멀티 스레드 방식이 default
-            "Main"
+            "node",
+            f"--max-old-space-size={test_case_memory_limit}",               # 최대 힙 메모리 지정
+            "--stack-size=1024",                                            # stack 최대 size 지정
+            javascript_filename
         ]
 
         try:
@@ -132,12 +106,16 @@ def execute_with_test_cases(test_cases: list, test_case_memory_limit: int, test_
                         return_code=1
                     )
                 else:
-                    # 힙 메모리 제한 초과 시 java.lang.OutOfMemoryError 발생하므로
+                    # 힙 메모리 제한 초과 시 JavaScript heap out of memory 발생하므로
                     # 별도로 메모리 초과 케이스를 조건문으로 필터링 하지 않아도 OK
+                    if "JavaScript heap out of memory" in proc_run.stderr:
+                        runtime_error_message = "JavaScript heap out of memory"
+                    else:
+                        runtime_error_message = proc_run.stderr.rstrip()
                     print_verdict(
                         False,
                         test_case_index=idx+1,
-                        runtime_error=proc_run.stderr.rstrip()
+                        runtime_error=runtime_error_message
                     )
                 continue
         except subprocess.TimeoutExpired:
@@ -232,10 +210,10 @@ def process_arguments():
             return_code=1
         )
 
-    # 7) 자바 파일 생성
+    # 7) 자바스크립트 파일 생성
     try:
-        java_filename = "Main.java"
-        with open(java_filename, "w", encoding="utf-8") as f:
+        javascript_filename = f"main{get_file_extension(code_filename)}"
+        with open(javascript_filename, "w", encoding="utf-8") as f:
             f.write(code)
     except Exception as e:
         print_system_error(
@@ -243,13 +221,12 @@ def process_arguments():
             return_code=1
         )
 
-    return test_case_memory_limit, test_cases, test_case_time_limit
+    return test_case_memory_limit, test_cases, test_case_time_limit, javascript_filename
 
 
 def main():
-    test_case_memory_limit, test_cases, test_case_time_limit = process_arguments()
-    compile_java_code(test_case_memory_limit)
-    execute_with_test_cases(test_cases, test_case_memory_limit, test_case_time_limit)
+    test_case_memory_limit, test_cases, test_case_time_limit, javascript_filename = process_arguments()
+    execute_with_test_cases(test_cases, test_case_memory_limit, test_case_time_limit, javascript_filename)
 
 
 if __name__ == "__main__":
