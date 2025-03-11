@@ -161,3 +161,9 @@ cython_debug/
 
 # dockerfile
 Dockerfile
+
+# seccomp setting
+seccomp-profile.json
+
+# shell script
+run.sh
