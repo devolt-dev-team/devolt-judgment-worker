@@ -20,8 +20,8 @@ class DockerConfig:
         "nodejs20": get_env_var("SANDBOX_SCRIPT_PATH_NODEJS20"),
         "nodejs20esm": get_env_var("SANDBOX_SCRIPT_PATH_NODEJS20"),
         "python3": get_env_var("SANDBOX_SCRIPT_PATH_PYTHON3"),
-        'c11': get_env_var("SANDBOX_SCRIPT_PATH_CLANG15"),
-        'cpp17': get_env_var("SANDBOX_SCRIPT_PATH_CLANG15")
+        'c11': get_env_var("SANDBOX_SCRIPT_PATH_C11"),
+        'cpp17': get_env_var("SANDBOX_SCRIPT_PATH_CPP17")
     }
 
     SECCOMP_PROFILE_PATH = get_env_var("SECCOMP_PROFILE_PATH")

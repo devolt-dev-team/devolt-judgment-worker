@@ -43,37 +43,45 @@ def _build_docker_run_cmd(
         list[str]: 도커 실행 명령어 리스트
     """
 
-    # 문제에 따라 조정이 필요한 경우 다른 상수 값 처럼 문제 별로 설정한 값을 할당할 것
-    pids_limit = 300
-
-    sandbox_image = DockerConfig.SANDBOX_IMAGE_NAME[code_language]
-    sandbox_script_path = DockerConfig.SANDBOX_SCRIPT_PATH[code_language]
-    seccomp_profile_path = DockerConfig.SECCOMP_PROFILE_PATH
-
+    # 소스 코드 확장자 추출 및 해당 디렉터리 경로명 추출
     _, file_extension = os.path.splitext(tmp_code_path)
     tmp_directory_path = os.path.dirname(tmp_code_path)
-    logging.info(f"생성된 임시 경로: {tmp_directory_path}")
+
+    # seccomp 보안 프로필 경로 로드
+    seccomp_profile_path = DockerConfig.SECCOMP_PROFILE_PATH
+
+    # 샌드박스 이미지 및 스크립트 경로 로드
+    sandbox_image = DockerConfig.SANDBOX_IMAGE_NAME[code_language]
+    sandbox_script_path = DockerConfig.SANDBOX_SCRIPT_PATH[code_language]
+
+    # 내부 프로세스 수 상한
+    pids_limit = 50
 
     return [
         "docker", "run", "--rm", "-t",                                                                  # --rm: 컨테이너가 종료될 때 컨테이너와 관련된 리소스(파일 시스템, 볼륨) 제거, -t: 컨테이너 출력을 즉시 read하기 위해 컨테이너에 가상 TTY 할당하고 subprocess의 I/O 스트림과 직접 연결
-        "--network", "none",                                                                            # 네트워크 차단
-        # "--tmpfs", f"/tmp:size=63m,exec,nosuid,nodev",                                                  # 컨테이너 내부에서 쓰기 가능한 메모리 기반 파일 시스템 tmpfs 마운트 경로 설정, 용량, 실행 권한 추가, 권한 설정 setuid, setgid 명령어 무효화, 장치 파일(리눅스 커널과 상호작용 가능한 파일)을 열 수 없도록 설정
-        "--mount", f"type=bind,source={tmp_directory_path},target=/tmp",
+
+        "--mount", f"type=bind,source={tmp_directory_path},target=/tmp",                                # 컨테이너 내부에서 쓰기 가능한 파일 시스템 마운트
         "--mount", f"type=bind,source={tmp_code_path},target=/tmp/program{file_extension},readonly",    # 소스코드 마운트
         "--mount", f"type=bind,source={sandbox_script_path},target=/tmp/run.sh,readonly",               # 채점 스크립트 마운트
         "--read-only",                                                                                  # 파일 시스템은 기본적으로 읽기 전용 설정
+
+        "--ulimit", "nofile=32:32",                                                                     # 열 수 있는 파일 수 제한
+        "--ulimit", f"fsize=1572864",                                                                   # 최대 파일 크기 1.5MB로 제한
+
         "--memory", f"{test_case_memory_limit_mb}m",                                                    # 메모리 제한 (컨테이너 유지 비용, time/perf 실행 비용, tmpfs 유지 비용을 고려, 여유분 16mb 추가 할당), 내부 하위 프로세스는 메모리 사용 초과 시 SIGKILL 처리 되어 -9 반환하고 종료됨
         "--memory-swap", f"{test_case_memory_limit_mb}m",                                               # 메모리 제한을 정확하게 적용하기 위해 메모리 스왑 (디스크 할당) 금지
         "--cpus", f"{cpu_core_limit}",                                                                  # CPU 코어 수 제한 (서버 사양에 따라 여유가 있다면 1로 설정해도 괜찮음)
         "--pids-limit", f"{pids_limit}",                                                                # 프로세스 수 제한
+
+        "--network", "none",                                                                            # 네트워크 차단
         "--cap-drop", "ALL",                                                                            # 기본적으로 부여되는 모든 권한을 제거하고, 최소한의 권한만 사용하도록 설정
-        "--cap-add", "PERFMON",                                                                         # 성능 모니터링을 위한 권한 추가 (perf)
-        "--cap-add", "SYS_PTRACE",                                                                      # 디버깅 및 트레이싱을 위한 권한 추가
         "--security-opt", "no-new-privileges",                                                          # 새로운 권한 획득 제한
-        "--security-opt", f"seccomp={seccomp_profile_path}",                                                 # 내부 시스템콜 제한
+        "--security-opt", f"seccomp={seccomp_profile_path}",                                            # 내부 시스템콜 제한
+
         "--workdir", f"/tmp",                                                                           # WORKDIR 설정, 모든 명령어 실행 루트
         "--init",                                                                                       # 좀비 프로세스가 생성되는 것을 방지하기 위해 init 프로세스를 컨테이너 내부 최상단 프로세스로 생성
-        f"{sandbox_image}",                                                                         # 도커 이미지 설정
+
+        f"{sandbox_image}",                                                                             # 도커 이미지 설정
 
         # 컨테이너로 전달할 추가 시스템 argument
         f"/tmp/run.sh",

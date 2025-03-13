@@ -164,6 +164,9 @@ Dockerfile
 
 # seccomp setting
 seccomp-profile.json
+seccomp-profile-san.json
 
 # shell script
 run.sh
+run-c11.sh
+run-c11-san.sh
