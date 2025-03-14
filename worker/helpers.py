@@ -9,7 +9,7 @@ import logging
 from common import *
 from config import DockerConfig
 from schema import Verdict
-from schema.webhook_event import TestCaseResult, Error, SubmissionResult
+from schema.webhook_event import *
 from schema.job import CodeChallengeJudgmentJob as Job
 from redisutil.repository import job_repository
 from worker.webhook_manager import AsyncWebhookManager
@@ -86,7 +86,8 @@ def _build_docker_run_cmd(
         # 컨테이너로 전달할 추가 시스템 argument
         f"/tmp/run.sh",
         json.dumps(test_cases),                                                                         # 테스트 케이스 입력 값 리스트 (JSON 직렬화)
-        str(test_case_time_limit_sec)                                                                   # 테스트 케이스 실행 시간 제한
+        str(test_case_time_limit_sec),                                                                  # 테스트 케이스 실행 시간 제한
+        str(test_case_memory_limit_mb)                                                                  # 테스트 케이스 메모리 상한
     ]
 
 
@@ -126,6 +127,22 @@ async def async_handle_output(
     webhook_manager: AsyncWebhookManager,
     tasks: list[asyncio.Task]
 ) -> None:
+    """Docker 컨테이너 출력을 비동기적으로 처리하는 함수
+
+    컨테이너 내부 스트림 출력을 파싱하고 결과를 웹훅으로 전송합니다.
+
+    Args:
+        stream (StreamReader): asyncio 스트림 리더 (stdout 또는 stderr)
+        proc (Process): 실행 중인 도커 프로세스
+        cleanup_job_and_return_event (Event): 작업 정리 이벤트
+        job_id (str): 작업 ID
+        verdicts (list[Verdict]): 결과를 저장할 Verdict 객체 리스트
+        webhook_manager (AsyncWebhookManager): 웹훅 매니저
+        tasks (list[Task]): 웹훅 응답 처리 작업 리스트
+
+    Returns:
+        None
+    """
     unexpected_output = []
     try:
         while True:
@@ -133,33 +150,71 @@ async def async_handle_output(
             if not line:
                 break
 
-            line = line.decode('utf-8').strip()
+            line_str = line.decode('utf-8').strip()
+            if not line_str:
+                continue
 
-            if line.startswith("VERDICT:"):
-                verdict = Verdict.create_from_dict(json.loads(line[len("VERDICT:"):]))
-                verdicts.append(verdict)
+            try:
+                result = json.loads(line_str)
+                status = result.get('status')
+                passed = result.get('passed')
 
-                webhook_event = TestCaseResult(job_id, verdict)
-                future = asyncio.ensure_future(webhook_manager.send_webhook(webhook_event))
-                tasks.append(asyncio.create_task(handle_webhook_response(future, proc, cleanup_job_and_return_event, job_id)))
+                # 시스템 에러, 런타임/컴파일 에러 처리
+                if status == 'system_error':
+                    raise Exception(result.get('error'))
 
-            elif line.startswith("SYSTEM_ERROR:"):
-                error_dict = json.loads(line[len("SYSTEM_ERROR:"):])
-                logging.error(f"[Unexpected error in sandbox for job {job_id}. Error: {error_dict['error']}]")
+                elif status == 'compile_error':
+                    verdict = Verdict(
+                        passed=False,
+                        compile_error=result.get('error')
+                    )
+                    verdicts.append(verdict)
 
-                # proc.kill()은 생략해도 ok (proc은 SYSTEM_ERROR 출력 후 자동으로 종료됨)
-                cleanup_job_and_return_event.set()
-                await webhook_manager.send_webhook(Error(job_id))
-                break
+                    webhook_event = TestCaseResult(job_id, verdict)
+                    future = asyncio.ensure_future(webhook_manager.send_webhook(webhook_event))
+                    tasks.append(asyncio.create_task(
+                        handle_webhook_response(future, proc, cleanup_job_and_return_event, job_id)))
 
-            else:
-                unexpected_output.append(line)
+                elif status == 'runtime_error':
+                    verdict = Verdict(
+                        test_case_index=result.get('testCaseIndex'),
+                        passed=False,
+                        runtime_error=result.get('error')
+                    )
+                    verdicts.append(verdict)
+
+                    webhook_event = TestCaseResult(job_id, verdict)
+                    future = asyncio.ensure_future(webhook_manager.send_webhook(webhook_event))
+                    tasks.append(asyncio.create_task(
+                        handle_webhook_response(future, proc, cleanup_job_and_return_event, job_id)))
+
+                elif isinstance(passed, bool):
+                    verdict = Verdict(
+                        test_case_index=result.get('testCaseIndex'),
+                        passed=result.get('passed'),
+                        elapsed_time_ms=result.get('elapsedTimeMs'),
+                        memory_usage_mb=result.get('memoryUsageMb')
+                    )
+                    verdicts.append(verdict)
+
+                    webhook_event = TestCaseResult(job_id, verdict)
+                    future = asyncio.ensure_future(webhook_manager.send_webhook(webhook_event))
+                    tasks.append(asyncio.create_task(
+                        handle_webhook_response(future, proc, cleanup_job_and_return_event, job_id)))
+
+                else:
+                    unexpected_output.append(line_str)
+
+                logging.info(f"[DEBUG] {result}")
+            except json.JSONDecodeError:
+                # JSON이 아닌 경우 예상치 못한 출력으로 간주
+                unexpected_output.append(line_str)
 
         if unexpected_output:
-            raise Exception(("\n".join(unexpected_output)))
+            raise Exception(f"Unexpected output from container: {("\n".join(unexpected_output))}")
 
-    except Exception as ex:
-        logging.error(f"Unexpected output from sandbox for job {job_id}", exc_info=True)
+    except Exception:
+        logging.error(f"Unexpected error occurred during handling job sandbox for job {job_id}", exc_info=True)
 
         proc.kill()
         cleanup_job_and_return_event.set()
@@ -241,42 +296,18 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
                 job_repository.delete(job.job_id, user_id)
                 return
 
-            overall_pass = True
-            max_memory_used_mb = -1.0
-            max_elapsed_time_sec = -1.0
-            compile_error = None
-            runtime_error = None
-
-            for verdict in verdicts:
-                if verdict.compile_error or verdict.runtime_error or not verdict.passed:
-                    overall_pass = False
-                    max_memory_used_mb = None
-                    max_elapsed_time_sec = None
-                    compile_error = verdict.compile_error
-                    runtime_error = verdict.runtime_error
-                    break
-
-                d = verdict.as_dict()
-                max_memory_used_mb = max(max_memory_used_mb, d.get('memoryUsedMb'))
-                max_elapsed_time_sec = max(max_elapsed_time_sec, d.get('elapsedTimeSec'))
-
-            # 최종 채점 결과 전송
-            result = SubmissionResult(
+            judgment = create_judgment_from_verdicts(
                 user_id=user_id,
                 job_id=job.job_id,
                 challenge_id=job.challenge_id,
                 code_language=job.code_language,
                 code=job.code,
                 code_byte_size=len(job.code),
-                overall_pass=overall_pass,
-                max_memory_used_mb=max_memory_used_mb,
-                max_elapsed_time_sec=max_elapsed_time_sec,
-                compile_error=compile_error,
-                runtime_error=runtime_error,
-                submitted_at=job.submitted_at
+                submitted_at=job.submitted_at,
+                verdicts=verdicts
             )
 
-            await webhook_manager.send_webhook(result)
+            await webhook_manager.send_webhook(judgment)
             job_repository.delete(job.job_id, user_id)
 
     # finally는 os._exit(code)를 호출하는 경우(os.exit(code)와 다름)를 제외하고 항상 실행 됨

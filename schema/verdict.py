@@ -8,8 +8,8 @@ from schema import Schema
 class Verdict(Schema):
     passed: bool
     test_case_index: Optional[int] = None
-    memory_used_mb: Optional[float] = None
-    elapsed_time_sec: Optional[float] = None
+    memory_usage_mb: Optional[float] = None
+    elapsed_time_ms: Optional[int] = None
     runtime_error: Optional[str] = None
     compile_error: Optional[str] = None
 
@@ -19,8 +19,8 @@ if __name__=='__main__':
     input_dict = {
         "passed": True,
         "testCaseIndex": 1,
-        "memoryUsedMb": 15.2,
-        "elapsedTimeSec": 0.11,
+        "memoryUsageMb": 15.2,
+        "elapsedTimeMs": 54,
         "runtimeError": None,
         "compileError": None
     }

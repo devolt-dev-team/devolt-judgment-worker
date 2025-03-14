@@ -83,8 +83,8 @@ if __name__=='__main__':
     input_dict = {
         "passed": True,
         "testCaseIndex": 1,
-        "memoryUsedMb": 15.2,
-        "elapsedTimeSec": 1.20,
+        "memoryUsageMb": 15.2,
+        "elapsedTimeMs": 10,
         "runtime_error": None,
         "compile_error": None
     }

@@ -14,8 +14,8 @@ if __name__=='__main__':
     input_dict = {
         "passed": True,
         "testCaseIndex": 1,
-        "memoryUsedMb": 15.2,
-        "elapsedTimeSec": 120,
+        "memoryUsageMb": 15.2,
+        "elapsedTimeMs": 12,
         "runtime_error": None,
         "compile_error": None
     }
