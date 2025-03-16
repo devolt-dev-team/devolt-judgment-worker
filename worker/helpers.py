@@ -28,7 +28,7 @@ def _build_docker_run_cmd(
     코드 채점을 위한 도커 컨테이너 실행 명령어를 생성합니다. 보안 및 리소스 제한 설정을 포함합니다.
 
     Args:
-        tmp_code_path (str): temp 코드 파일 경로
+        tmp_code_path (str): temp 디렉토리에 생성된 코드 파일 경로
         code_language (str): 프로그래밍 언어
         test_cases (tuple): 테스트 케이스 튜플 (입력값, 기대출력) 리스트
         test_case_memory_limit_mb (int): 테스트케이스 메모리 제한(MB)
@@ -43,9 +43,8 @@ def _build_docker_run_cmd(
         list[str]: 도커 실행 명령어 리스트
     """
 
-    # 소스 코드 확장자 추출 및 해당 디렉터리 경로명 추출
-    _, file_extension = os.path.splitext(tmp_code_path)
-    tmp_directory_path = os.path.dirname(tmp_code_path)
+    # tmp_code_path에서 디렉터리 정보, 파일 이름 분리
+    tmp_directory_path, code_file_name = os.path.split(tmp_code_path)
 
     # seccomp 보안 프로필 경로 로드
     seccomp_profile_path = DockerConfig.SECCOMP_PROFILE_PATH
@@ -61,7 +60,7 @@ def _build_docker_run_cmd(
         "docker", "run", "--rm", "-t",                                                                  # --rm: 컨테이너가 종료될 때 컨테이너와 관련된 리소스(파일 시스템, 볼륨) 제거, -t: 컨테이너 출력을 즉시 read하기 위해 컨테이너에 가상 TTY 할당하고 subprocess의 I/O 스트림과 직접 연결
 
         "--mount", f"type=bind,source={tmp_directory_path},target=/tmp",                                # 컨테이너 내부에서 쓰기 가능한 파일 시스템 마운트
-        "--mount", f"type=bind,source={tmp_code_path},target=/tmp/program{file_extension},readonly",    # 소스코드 마운트
+        "--mount", f"type=bind,source={tmp_code_path},target=/tmp/{code_file_name},readonly",    # 소스코드 마운트
         "--mount", f"type=bind,source={sandbox_script_path},target=/tmp/run.sh,readonly",               # 채점 스크립트 마운트
         "--read-only",                                                                                  # 파일 시스템은 기본적으로 읽기 전용 설정
 
@@ -228,16 +227,16 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
             # 소스 코드 임시 파일 생성
             code_decoded = base64.b64decode(job.code).decode("utf-8")
             test_cases = TEST_CASES[job.challenge_id]
-            file_extension = {
-                'java17': '.java',
-                'nodejs20': '.js',      # CommonJS
-                'nodejs20esm': '.mjs',  # ESM
-                'python3': '.py',
-                'c11': '.c',
-                'cpp17': '.cpp'
+            code_file_name = {
+                'java17': 'Main.java',
+                'nodejs20': 'main.js',      # CommonJS
+                'nodejs20esm': 'main.mjs',  # ESM
+                'python3': 'main.py',
+                'c11': 'main.c',
+                'cpp17': 'main.cpp'
             }.get(job.code_language)
 
-            tmp_code_path = os.path.join(tmp_dir, f"program{file_extension}")
+            tmp_code_path = os.path.join(tmp_dir, f"{code_file_name}")
             with open(tmp_code_path, "w", encoding="utf-8") as f:
                 f.write(code_decoded)
 

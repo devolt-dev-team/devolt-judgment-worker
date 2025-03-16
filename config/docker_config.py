@@ -9,7 +9,7 @@ class DockerConfig:
     SANDBOX_IMAGE_NAME = {
         "java17": get_env_var("SANDBOX_IMAGE_JAVA17"),
         "nodejs20": get_env_var("SANDBOX_IMAGE_NODEJS20"),
-        "nodejs20esm": get_env_var("SANDBOX_IMAGE_NODEJS20"),
+        "nodejs20esm": get_env_var("SANDBOX_IMAGE_NODEJS20ESM"),
         "python3": get_env_var("SANDBOX_IMAGE_PYTHON3"),
         'c11': get_env_var("SANDBOX_IMAGE_CLANG15"),
         'cpp17': get_env_var("SANDBOX_IMAGE_CLANG15")
@@ -18,7 +18,7 @@ class DockerConfig:
     SANDBOX_SCRIPT_PATH = {
         "java17": get_env_var("SANDBOX_SCRIPT_PATH_JAVA17"),
         "nodejs20": get_env_var("SANDBOX_SCRIPT_PATH_NODEJS20"),
-        "nodejs20esm": get_env_var("SANDBOX_SCRIPT_PATH_NODEJS20"),
+        "nodejs20esm": get_env_var("SANDBOX_SCRIPT_PATH_NODEJS20ESM"),
         "python3": get_env_var("SANDBOX_SCRIPT_PATH_PYTHON3"),
         'c11': get_env_var("SANDBOX_SCRIPT_PATH_C11"),
         'cpp17': get_env_var("SANDBOX_SCRIPT_PATH_CPP17")
