@@ -2,7 +2,7 @@ import aiohttp  # 비동기 HTTP 요청을 보내기 위한 라이브러리입�
 import logging
 
 from config import WebhookConfig
-from schema.webhook_event import TestCaseResult, SubmissionResult, Error
+from schema.webhook_event import *
 
 
 class AsyncWebhookManager:
@@ -36,7 +36,8 @@ class AsyncWebhookManager:
         """
         endpoint_mapping = {
             TestCaseResult: WebhookConfig.WEBHOOK_NOTIFY_VERDICT_ENDPOINT,
-            SubmissionResult: WebhookConfig.WEBHOOK_NOTIFY_SUBMISSION_RESULT_ENDPOINT,
+            PassedJudgment: WebhookConfig.WEBHOOK_NOTIFY_SUBMISSION_RESULT_ENDPOINT,
+            UnpassedJudgment: WebhookConfig.WEBHOOK_NOTIFY_SUBMISSION_RESULT_ENDPOINT,
             Error: WebhookConfig.WEBHOOK_NOTIFY_ERROR_ENDPOINT
         }
         endpoint = endpoint_mapping.get(type(event), WebhookConfig.WEBHOOK_NOTIFY_ERROR_ENDPOINT)

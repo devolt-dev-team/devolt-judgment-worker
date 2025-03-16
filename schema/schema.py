@@ -1,4 +1,6 @@
 from dataclasses import asdict, dataclass, fields
+from enum import Enum
+from typing import Any
 
 from common import camel_to_snake, snake_to_camel
 
@@ -38,10 +40,29 @@ class Schema:
         # 이미 입력 값을 validate_keys를 통해 검증 하였기 때문에 무시
         return cls(**processed_dict)
 
-    def as_dict(self) -> dict[str, any]:
+    def as_dict(self) -> dict[str, Any]:
         """
         dataclasses.asdict를 이용해 객체를 사전(dict)로 변환합니다.
         추가로, 키를 snake_case에서 camelCase로 변환합니다.
+        Enum 타입의 값은 .value를 사용하여 직렬화합니다.
         """
-        raw = asdict(self)
-        return {snake_to_camel(k): v for k, v in raw.items()}
+        # 먼저 기본 asdict 함수로 딕셔너리 변환
+        raw_dict = asdict(self)
+
+        # Enum 타입을 처리하는 함수
+        def process_value(value):
+            if isinstance(value, Enum):
+                return value.value
+            elif isinstance(value, dict):
+                return {k: process_value(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [process_value(item) for item in value]
+            return value
+
+        # 모든 값을 처리하고 키를 camelCase로 변환
+        processed_dict = {
+            snake_to_camel(k): process_value(v)
+            for k, v in raw_dict.items()
+        }
+
+        return processed_dict

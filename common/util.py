@@ -19,13 +19,15 @@ def get_time_bonus_by_language(code_language: str, challenge_id: int=None):
         'nodejs20': 0.0,
         'nodejs20esm': 0.0,
         'python3': 0.0,
+        'c11': 0.0,
+        'cpp17': 0.0
     }
 
     return time_bonus[code_language]
 
 
-def get_memory_bonus_by_language(code_language: str, challenge_id: int):
+def get_memory_bonus_by_language(code_language: str):
     if code_language == "java17":
-        return TEST_CASE_EXEC_MEM_LIMIT[challenge_id]
+        return 64
     else:
         return 0
