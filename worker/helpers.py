@@ -155,6 +155,12 @@ async def async_handle_output(
 
             try:
                 result = json.loads(line_str)
+
+                # JSON 이지만 dict가 아닌 단순 정수형 데이터 등인 경우는 알 수 없는 출력 처리
+                if not isinstance(result, dict):
+                    unexpected_output.append(line_str)
+                    continue
+
                 status = result.get('status')
                 passed = result.get('passed')
 
