@@ -1,6 +1,6 @@
 import re
-
-from common import TEST_CASE_EXEC_MEM_LIMIT
+import json
+import os
 
 
 def snake_to_camel(snake_str: str) -> str:
@@ -13,21 +13,12 @@ def camel_to_snake(camel_str: str) -> str:
     return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 
-def get_time_bonus_by_language(code_language: str, challenge_id: int=None):
-    time_bonus = {
-        'java17': 1.0,
-        'nodejs20': 0.0,
-        'nodejs20esm': 0.0,
-        'python3': 0.0,
-        'c11': 0.0,
-        'cpp17': 0.0
-    }
-
-    return time_bonus[code_language]
-
-
-def get_memory_bonus_by_language(code_language: str):
-    if code_language == "java17":
-        return 64
-    else:
-        return 0
+def load_json_file(file_path: str):
+    try:
+        with open(os.path.join(os.path.dirname(__file__), file_path), 'r', encoding='utf-8') as f:
+            json_dict = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"JSON file not found: {file_path}")
+    except json.JSONDecodeError:
+        raise ValueError(f"Invalid JSON format in file: {file_path}")
+    return json_dict

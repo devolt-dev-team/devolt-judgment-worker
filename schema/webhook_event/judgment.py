@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Optional
 
 from schema import Schema, Verdict
+from common import CodeLanguage
 
 
 class UnpassedReason(Enum):
@@ -124,7 +125,7 @@ if __name__ == "__main__":
         "user_id": 1,
         "job_id": "job123",
         "challenge_id": 42,
-        "code_language": "c11",
+        "code_language": CodeLanguage.C11.value,
         "code": "int main() { return 0; }",
         "code_byte_size": 20,
         "submitted_at": "2025-03-15T10:00:00"

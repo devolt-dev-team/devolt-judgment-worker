@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import pytz
 import uuid
 
+from common import CodeLanguage
 from schema import Schema, Verdict
 
 
@@ -68,7 +69,7 @@ class CodeChallengeJudgmentJob(Schema):
             job_id=str(uuid.uuid4()),
             stop_flag=False,
 
-            code_language=code_language.lower(),
+            code_language=code_language.upper(),
             code=code,
 
             challenge_id=challenge_id,
@@ -95,7 +96,7 @@ if __name__=='__main__':
         "jobId": "123-456",
         "stopFlag": False,
 
-        "codeLanguage": "java17",
+        "codeLanguage": CodeLanguage.JAVA17.value,
         "code": "hi",
 
         "challengeId": 1,

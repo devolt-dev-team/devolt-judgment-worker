@@ -171,3 +171,6 @@ run-c11.sh
 run-c11-san.sh
 run-cpp17.sh
 run-esm.sh
+
+# Test Cases
+test_cases_inputs_and_expected.json

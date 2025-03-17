@@ -1,8 +1,6 @@
 import asyncio # 비동기 작업을 처리하기 위한 파이썬 기본 라이브러리입니다. async와 await를 키워드를 통한 코루틴 작업을 통해 여러 작업을 동시에 실행할 수 있게 해줍니다.
 import base64
-import os
 import random
-import json
 import tempfile
 import logging
 
@@ -232,22 +230,15 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
         with tempfile.TemporaryDirectory() as tmp_dir:
             # 소스 코드 임시 파일 생성
             code_decoded = base64.b64decode(job.code).decode("utf-8")
-            test_cases = TEST_CASES[job.challenge_id]
-            code_file_name = {
-                'java17': 'Main.java',
-                'nodejs20': 'main.js',      # CommonJS
-                'nodejs20esm': 'main.mjs',  # ESM
-                'python3': 'main.py',
-                'c11': 'main.c',
-                'cpp17': 'main.cpp'
-            }.get(job.code_language)
+            test_cases = TEST_CASES[str(job.challenge_id)]
+            code_file_name = CODE_FILE_NAME.get(job.code_language)
 
             tmp_code_path = os.path.join(tmp_dir, f"{code_file_name}")
             with open(tmp_code_path, "w", encoding="utf-8") as f:
                 f.write(code_decoded)
 
-            test_case_memory_limit = TEST_CASE_EXEC_MEM_LIMIT[job.challenge_id] + get_memory_bonus_by_language(job.code_language)
-            test_case_time_limit = TEST_CASE_EXEC_TIME_LIMIT[job.challenge_id] + get_time_bonus_by_language(job.code_language)
+            test_case_memory_limit = TEST_CASES_MEM_LIMITS[str(job.challenge_id)] + TEST_CASE_LIMITS_MEMORY_BONUS[job.code_language]
+            test_case_time_limit = TEST_CASES_TIME_LIMITS[str(job.challenge_id)] + TEST_CASE_LIMITS_TIME_BONUS[job.code_language]
 
             # Docker 명령어 생성
             docker_cmd = _build_docker_run_cmd(

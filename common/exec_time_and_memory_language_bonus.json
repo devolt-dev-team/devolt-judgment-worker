@@ -1,0 +1,18 @@
+{
+  "timeBonus": {
+    "C11": 0.0,
+    "CPP17": 0.0,
+    "PYTHON3": 0.5,
+    "NODEJS20": 0.5,
+    "NODEJS20ESM": 0.5,
+    "JAVA17": 1.0
+  },
+  "memoryBonus": {
+    "C11": 0,
+    "CPP17": 0,
+    "PYTHON3": 32,
+    "NODEJS20": 64,
+    "NODEJS20ESM": 64,
+    "JAVA17": 64
+  }
+}
