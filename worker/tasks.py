@@ -18,9 +18,9 @@ def execute_code(self, user_id: int, job_dict: dict):
         loop.run_until_complete(async_execute_code(user_id, job, webhook_manager))
     except Exception as e:
         if not job or not loop or not webhook_manager: raise
-        logging.error(f"[{job.job_id} 작업 실행 중 처리되지 않은 예외 발생]", exc_info=True)
+        logging.error(f"작업 실행 중 처리되지 않은 예외 발생\n작업 정보: {job_dict}", exc_info=True)
         job_repository.delete(job.job_id, user_id)
-        loop.run_until_complete(webhook_manager.send_webhook(Error(job.job_id)))
+        loop.run_until_complete(webhook_manager.dispatch_webhook_callback(Error(job.job_id)))
     finally:
         if loop and webhook_manager:
             loop.run_until_complete(webhook_manager.shutdown())

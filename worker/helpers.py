@@ -1,11 +1,12 @@
 import asyncio # 비동기 작업을 처리하기 위한 파이썬 기본 라이브러리입니다. async와 await를 키워드를 통한 코루틴 작업을 통해 여러 작업을 동시에 실행할 수 있게 해줍니다.
 import base64
+import json
+import os
 import random
 import tempfile
 import logging
 
-from common import *
-from config import DockerConfig
+from config import DockerConfig, TestCaseConfig
 from schema import Verdict
 from schema.webhook_event import *
 from schema.job import CodeChallengeJudgmentJob as Job
@@ -15,8 +16,8 @@ from worker.webhook_manager import AsyncWebhookManager
 
 def _build_docker_run_cmd(
     tmp_code_path: str,
-    code_language: str,
-    test_cases: tuple[tuple[list, str]],
+    code_language: CodeLanguage,
+    test_cases: list[list[list, str]],
     test_case_memory_limit_mb: int,
     test_case_time_limit_sec: float,
     cpu_core_limit: float = 0.5
@@ -27,10 +28,10 @@ def _build_docker_run_cmd(
 
     Args:
         tmp_code_path (str): temp 디렉토리에 생성된 코드 파일 경로
-        code_language (str): 프로그래밍 언어
-        test_cases (tuple): 테스트 케이스 튜플 (입력값, 기대출력) 리스트
-        test_case_memory_limit_mb (int): 테스트케이스 메모리 제한(MB)
-        test_case_time_limit_sec (float): 테스트케이스 실행 시간 제한(초)
+        code_language (CodeLanguage): 프로그래밍 언어
+        test_cases (list): 테스트 케이스(입력값, 기대값) 리스트
+        test_case_memory_limit_mb (int): 챌린지 메모리 제한(MB)
+        test_case_time_limit_sec (float): 챌린지 실행 시간 제한(초)
         cpu_core_limit (float): 실행 환경 할당 CPU 코어 수
 
     Notes:
@@ -45,11 +46,10 @@ def _build_docker_run_cmd(
     tmp_directory_path, code_file_name = os.path.split(tmp_code_path)
 
     # seccomp 보안 프로필 경로 로드
-    seccomp_profile_path = DockerConfig.SECCOMP_PROFILE_PATH
+    seccomp_profile_path = DockerConfig.get_seccomp_profile_path()
 
     # 샌드박스 이미지 및 스크립트 경로 로드
-    sandbox_image = DockerConfig.SANDBOX_IMAGE_NAME[code_language]
-    sandbox_script_path = DockerConfig.SANDBOX_SCRIPT_PATH[code_language]
+    sandbox_image, sandbox_script_path = DockerConfig.get_sandbox_image_name_and_script_path(code_language)
 
     # 내부 프로세스 수 상한
     pids_limit = 50
@@ -122,7 +122,8 @@ async def async_handle_output(
     job_id: str,
     verdicts: list[Verdict],
     webhook_manager: AsyncWebhookManager,
-    tasks: list[asyncio.Task]
+    tasks: list[asyncio.Task],
+    stream_name: str
 ) -> None:
     """Docker 컨테이너 출력을 비동기적으로 처리하는 함수
 
@@ -136,6 +137,7 @@ async def async_handle_output(
         verdicts (list[Verdict]): 결과를 저장할 Verdict 객체 리스트
         webhook_manager (AsyncWebhookManager): 웹훅 매니저
         tasks (list[Task]): 웹훅 응답 처리 작업 리스트
+        stream_name (str): stdout 또는 stderr
 
     Returns:
         None
@@ -151,6 +153,10 @@ async def async_handle_output(
             if not line_str:
                 continue
 
+            if stream_name == 'stderr':
+                unexpected_output.append(line_str)
+                continue
+
             try:
                 result = json.loads(line_str)
 
@@ -159,49 +165,50 @@ async def async_handle_output(
                     unexpected_output.append(line_str)
                     continue
 
-                status = result.get('status')
+                error_status = result.get('status')
                 passed = result.get('passed')
 
-                # 시스템 에러, 런타임/컴파일 에러 처리
-                if status == 'system_error':
-                    raise Exception(result.get('error'))
+                if isinstance(error_status, str):
+                    # 시스템 에러
+                    if error_status == 'systemError':
+                        raise Exception(result.get('error'))
 
-                elif status == 'compile_error':
+                    exit_code = int(result.get('exitCode'))
+                    failure_reason_map = {
+                        0: FailureCause.COMPILE_ERROR if error_status == 'compileError' else FailureCause.RUNTIME_ERROR,
+                        124: FailureCause.COMPILE_TIMEOUT if error_status == 'compileError' else FailureCause.RUNTIME_TIMEOUT,
+                        137: FailureCause.COMPILE_OUT_OF_MEMORY if error_status == 'compileError' else FailureCause.RUNTIME_OUT_OF_MEMORY
+                    }
+                    default_failure_reason = failure_reason_map.get(0)
+
+                    # 컴파일/런타임 에러 처리
                     verdict = Verdict(
+                        test_case_index=None if error_status == 'compileError' else result.get('testCaseIndex'),
                         passed=False,
-                        compile_error=result.get('error')
+                        failure_cause=failure_reason_map.get(exit_code, default_failure_reason),
+                        failure_detail=result.get('error')
                     )
                     verdicts.append(verdict)
 
                     webhook_event = TestCaseResult(job_id, verdict)
-                    future = asyncio.ensure_future(webhook_manager.send_webhook(webhook_event))
-                    tasks.append(asyncio.create_task(
-                        handle_webhook_response(future, proc, cleanup_job_and_return_event, job_id)))
-
-                elif status == 'runtime_error':
-                    verdict = Verdict(
-                        test_case_index=result.get('testCaseIndex'),
-                        passed=False,
-                        runtime_error=result.get('error')
-                    )
-                    verdicts.append(verdict)
-
-                    webhook_event = TestCaseResult(job_id, verdict)
-                    future = asyncio.ensure_future(webhook_manager.send_webhook(webhook_event))
+                    future = asyncio.ensure_future(webhook_manager.dispatch_webhook_callback(webhook_event))
                     tasks.append(asyncio.create_task(
                         handle_webhook_response(future, proc, cleanup_job_and_return_event, job_id)))
 
                 elif isinstance(passed, bool):
                     verdict = Verdict(
                         test_case_index=result.get('testCaseIndex'),
-                        passed=result.get('passed'),
-                        elapsed_time_ms=result.get('elapsedTimeMs'),
-                        memory_usage_mb=result.get('memoryUsageMb')
+                        passed=passed,
                     )
+                    if not passed:
+                        verdict.failure_cause=FailureCause.WRONG_ANSWER
+                    else:
+                        verdict.elapsed_time_ms=result.get('elapsedTimeMs')
+                        verdict.memory_usage_mb=result.get('memoryUsageMb')
                     verdicts.append(verdict)
 
                     webhook_event = TestCaseResult(job_id, verdict)
-                    future = asyncio.ensure_future(webhook_manager.send_webhook(webhook_event))
+                    future = asyncio.ensure_future(webhook_manager.dispatch_webhook_callback(webhook_event))
                     tasks.append(asyncio.create_task(
                         handle_webhook_response(future, proc, cleanup_job_and_return_event, job_id)))
 
@@ -221,7 +228,7 @@ async def async_handle_output(
 
         proc.kill()
         cleanup_job_and_return_event.set()
-        await webhook_manager.send_webhook(Error(job_id))
+        await webhook_manager.dispatch_webhook_callback(Error(job_id))
 
 
 async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebhookManager):
@@ -230,15 +237,27 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
         with tempfile.TemporaryDirectory() as tmp_dir:
             # 소스 코드 임시 파일 생성
             code_decoded = base64.b64decode(job.code).decode("utf-8")
-            test_cases = TEST_CASES[str(job.challenge_id)]
-            code_file_name = CODE_FILE_NAME.get(job.code_language)
+            code_file_name = DockerConfig.get_source_code_file_name(job.code_language)
 
             tmp_code_path = os.path.join(tmp_dir, f"{code_file_name}")
             with open(tmp_code_path, "w", encoding="utf-8") as f:
                 f.write(code_decoded)
 
-            test_case_memory_limit = TEST_CASES_MEM_LIMITS[str(job.challenge_id)] + TEST_CASE_LIMITS_MEMORY_BONUS[job.code_language]
-            test_case_time_limit = TEST_CASES_TIME_LIMITS[str(job.challenge_id)] + TEST_CASE_LIMITS_TIME_BONUS[job.code_language]
+            test_cases = TestCaseConfig.get_test_cases(job.challenge_id)
+            test_case_memory_limit = TestCaseConfig.get_memory_limit(job.challenge_id, job.code_language)
+            test_case_time_limit = TestCaseConfig.get_time_limit(job.challenge_id, job.code_language)
+
+            is_sandbox_timed_out = False
+            language_with_compile_process = (
+            CodeLanguage.JAVA17, CodeLanguage.PYTHON3, CodeLanguage.C11, CodeLanguage.CPP17)
+            compile_time_bonus = 5.0 if job.code_language in language_with_compile_process else 0.0
+
+            # sandbox 타임아웃 설정
+            sandbox_time_limit = len(test_cases) * test_case_time_limit + compile_time_bonus + 3.0  # 기타 오버 헤드 감안 3.0초 추가 할당
+
+            tasks = []
+            verdicts = []
+            cleanup_job_and_return_event = asyncio.Event()
 
             # Docker 명령어 생성
             docker_cmd = _build_docker_run_cmd(
@@ -256,33 +275,26 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
                 stderr=asyncio.subprocess.PIPE
             )
 
-            tasks = []
-            verdicts = []
-            cleanup_job_and_return_event = asyncio.Event()
-
             # sandbox 출력 처리는 백그라운드 작업 실행
             # asyncio에 의해 자동으로 스케줄링
             stdout_task = asyncio.create_task(
-                async_handle_output(sandbox_proc.stdout, sandbox_proc, cleanup_job_and_return_event, job.job_id, verdicts, webhook_manager, tasks)
+                async_handle_output(sandbox_proc.stdout, sandbox_proc, cleanup_job_and_return_event, job.job_id, verdicts, webhook_manager, tasks, 'stdout')
             )
             stderr_task = asyncio.create_task(
-                async_handle_output(sandbox_proc.stderr, sandbox_proc, cleanup_job_and_return_event, job.job_id, verdicts, webhook_manager, tasks)
+                async_handle_output(sandbox_proc.stderr, sandbox_proc, cleanup_job_and_return_event, job.job_id, verdicts, webhook_manager, tasks, 'stderr')
             )
 
             tasks.append(stdout_task)
             tasks.append(stderr_task)
 
-            # sandbox 타임아웃 설정
-            max_compile_time_limit = 5.0
-            total_timeout = len(test_cases) * test_case_time_limit + max_compile_time_limit + 10.0 # 오버 헤드 감안 10.0초 추가 할당
             try:
-                await asyncio.wait_for(sandbox_proc.wait(), timeout=total_timeout)
+                await asyncio.wait_for(sandbox_proc.wait(), timeout=sandbox_time_limit)
+
             except asyncio.TimeoutError:
                 # sandbox_proc에 SIGKILL 전달
                 # 프로세스가 종료, 도커 관련 리소스는 Docker 데몬이 백그라운드에서 처리
                 sandbox_proc.kill()
-                cleanup_job_and_return_event.set()
-                await webhook_manager.send_webhook(Error(job.job_id, "채점 실행 시간 최대 허용 한도 초과"))
+                is_sandbox_timed_out = True
 
             # Thread.join()과 유사하게, 백그라운드 작업(모든 테스트 케이스에 대한 verdict 전달) 완료 시점까지 대기
             await asyncio.gather(*tasks)
@@ -291,6 +303,30 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
             if cleanup_job_and_return_event.is_set():
                 job_repository.delete(job.job_id, user_id)
                 return
+
+            if any(not v.passed for v in verdicts):
+                # 이미 컴파일/런타임 단계에서 실패한 경우, 샌드박스 레벨의 추가 실패 원인은 기록하지 않음
+                # (예: 런타임에서 WRONG_ANSWER 발생 후 샌드박스 메모리 초과 시, 첫 번째 실패 사유 우선)
+                pass
+            else:
+                if is_sandbox_timed_out:
+                    verdict = Verdict(
+                        passed=False,
+                        failure_cause=FailureCause.SANDBOX_TIMEOUT,
+                        failure_detail="최대 실행 시간 제한을 초과하였습니다"
+                    )
+                    verdicts.append(verdict)
+                    webhook_event = TestCaseResult(job.job_id, verdict)
+                    await webhook_manager.dispatch_webhook_callback(webhook_event)
+                elif sandbox_proc.returncode == 137:
+                    verdict = Verdict(
+                        passed=False,
+                        failure_cause=FailureCause.SANDBOX_OUT_OF_MEMORY,
+                        failure_detail="최대 메모리 사용량 제한을 초과하였습니다"
+                    )
+                    verdicts.append(verdict)
+                    webhook_event = TestCaseResult(job.job_id, verdict)
+                    await webhook_manager.dispatch_webhook_callback(webhook_event)
 
             judgment = create_judgment_from_verdicts(
                 user_id=user_id,
@@ -303,7 +339,7 @@ async def async_execute_code(user_id: int, job: Job, webhook_manager: AsyncWebho
                 verdicts=verdicts
             )
 
-            await webhook_manager.send_webhook(judgment)
+            await webhook_manager.dispatch_webhook_callback(judgment)
             job_repository.delete(job.job_id, user_id)
 
     # finally는 os._exit(code)를 호출하는 경우(os.exit(code)와 다름)를 제외하고 항상 실행 됨

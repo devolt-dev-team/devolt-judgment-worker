@@ -24,7 +24,7 @@ if __name__=='__main__':
 
     test_case_result = TestCaseResult.create_from_dict({
         "jobId": "132-456",
-        "verdict": verdict
+        "verdict": 1
     })
 
     print(test_case_result.as_dict())

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import pytz
 import uuid
 
-from common import CodeLanguage
+from common import CodeLanguage, FailureCause
 from schema import Schema, Verdict
 
 
@@ -20,7 +20,7 @@ class CodeChallengeJudgmentJob(Schema):
         job_id (str): 작업(Job)의 고유 ID (UUID)
         stop_flag (bool): 사용자에 의한 작업 중지 요청 여부
 
-        code_language (str): 제출된 코드의 프로그래밍 언어
+        code_language (CodeLanguage): 제출된 코드의 프로그래밍 언어
         code (str): 평가할 코드 문자열
 
         challenge_id (int): 코딩 챌린지 ID (문제 ID)
@@ -32,7 +32,7 @@ class CodeChallengeJudgmentJob(Schema):
     job_id: str
     stop_flag: bool
 
-    code_language: str
+    code_language: CodeLanguage
     code: str
 
     challenge_id: int
@@ -41,9 +41,14 @@ class CodeChallengeJudgmentJob(Schema):
 
     submitted_at: str
 
+    def __post_init__(self):
+        """객체 초기화 후 code_language를 문자열에서 CodeLanguage 객체로 변환"""
+        if isinstance(self.code_language, str):
+            self.failure_cause = CodeLanguage(self.code_language)
+
     @staticmethod
     def create(
-        code_language: str,
+        code_language: CodeLanguage,
         code: str,
         challenge_id: int,
         total_test_cases: int
@@ -55,7 +60,7 @@ class CodeChallengeJudgmentJob(Schema):
             - 제출 시각(submitted_at)을 KST(한국 시간)으로 설정
 
         Args:
-            code_language (str): 프로그래밍 언어
+            code_language (CodeLanguage): 프로그래밍 언어
             code (str): 제출된 코드
             challenge_id (int): 평가할 챌린지(문제)의 ID
             total_test_cases (int): 총 테스트 케이스 개수
@@ -69,7 +74,7 @@ class CodeChallengeJudgmentJob(Schema):
             job_id=str(uuid.uuid4()),
             stop_flag=False,
 
-            code_language=code_language.upper(),
+            code_language=code_language,
             code=code,
 
             challenge_id=challenge_id,
@@ -79,15 +84,35 @@ class CodeChallengeJudgmentJob(Schema):
             submitted_at=now_in_seoul.strftime('%Y-%m-%dT%H:%M:%S')
         )
 
+    @classmethod
+    def create_from_dict(cls, judgment_job_dict: dict) -> "CodeChallengeJudgmentJob":
+        """
+        Description:
+            부모 클래스 Schema의 create_from_dict를 호출한 뒤,
+            code_language 필드를 CodeLanguage 객체로 변환하여 인스턴스를 생성합니다.
+
+        Args:
+            judgment_job_dict (dict): 입력 딕셔너리
+
+        Returns:
+            CodeChallengeJudgmentJob: 생성된 인스턴스
+        """
+        # 부모 클래스 Schema의 create_from_dict 호출
+        instance = super().create_from_dict(judgment_job_dict)
+
+        # code_language 변환 (문자열 -> CodeLanguage 객체)
+        if isinstance(instance.code_language, str):
+            instance.code_language = CodeLanguage(instance.code_language)
+
+        return instance
+
+
 # dict -> schema 변환 테스트: dict 필드 검증 및 인스턴스 반환
 if __name__=='__main__':
     input_dict = {
-        "passed": True,
+        "passed": False,
         "testCaseIndex": 1,
-        "memoryUsageMb": 15.2,
-        "elapsedTimeMs": 10,
-        "runtime_error": None,
-        "compile_error": None
+        "failureCause": FailureCause.WRONG_ANSWER
     }
 
     verdict = Verdict.create_from_dict(input_dict)
@@ -96,7 +121,7 @@ if __name__=='__main__':
         "jobId": "123-456",
         "stopFlag": False,
 
-        "codeLanguage": CodeLanguage.JAVA17.value,
+        "codeLanguage": CodeLanguage.JAVA17,
         "code": "hi",
 
         "challengeId": 1,
@@ -110,5 +135,4 @@ if __name__=='__main__':
 
     job = CodeChallengeJudgmentJob.create_from_dict(input_dict)
     print(job)
-    print()
     print(job.as_dict())
