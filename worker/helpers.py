@@ -149,7 +149,8 @@ async def async_handle_output(
             if not line:
                 break
 
-            line_str = line.decode('utf-8').strip()
+            # 디코딩 불가능한 경우 '�'로 대체
+            line_str = line.decode('utf-8', errors='replace').strip()
             if not line_str:
                 continue
 

@@ -105,8 +105,6 @@ def create_judgment_from_verdicts(
     Returns:
         Judgment: PassedJudgment 또는 UnpassedJudgment 인스턴스.
     """
-    print(verdicts)
-
     # 공통 필드 준비
     base_kwargs = {
         "user_id": user_id,
