@@ -5,3 +5,4 @@ class WebhookConfig:
     """
 
     WEBHOOK_CALLBACK_BASE_ENDPOINT = "http://127.0.0.1:8111/webhook/callback-event"
+    # WEBHOOK_CALLBACK_BASE_ENDPOINT = "https://devolt.shop/webhook/callback-event"
